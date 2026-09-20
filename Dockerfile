@@ -9,8 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     SERVER_PORT=8090
 
 # aria2：容器内 BT/磁力/HTTP 下载引擎
+# p7zip-full + libarchive-tools：字幕包可能是 rar/7z（libarchive 能读 rar5）
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends aria2 ca-certificates curl \
+    && apt-get install -y --no-install-recommends \
+        aria2 ca-certificates curl p7zip-full libarchive-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

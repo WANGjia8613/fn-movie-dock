@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -10,9 +12,17 @@ from typing import Any, Optional
 import httpx
 
 from ..config import AppConfig
+from ..llm import LLMClient
 from ..models import TaskOut
-from ..organizer import Organizer, parse_title_year
+from ..organizer import Organizer, parse_episode, parse_title_year
+from ..ranking import detect_tags
+from ..subtitle import SubtitleService
 from .http_fallback import download_http_to
+
+MEDIA_EXTS = {
+    ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m2ts",
+    ".webm", ".rmvb", ".mpg", ".mpeg", ".iso",
+}
 
 
 def _now() -> str:
@@ -50,12 +60,19 @@ class DownloadTask:
     files: list[str] = field(default_factory=list)
     saved_path: str = ""
     organized_path: str = ""
+    episode: str = ""
+    tags: list[str] = field(default_factory=list)
+    subtitle_status: str = ""
+    subtitle_path: str = ""
+    subtitle_note: str = ""
     error: str = ""
     created_at: str = ""
     updated_at: str = ""
     organize_opts: dict[str, Any] = field(default_factory=dict)
     engine: str = "aria2"
     http_dest: str = ""
+    fetch_subtitle: bool = True
+    incoming_dir: str = ""
 
     def to_out(self) -> TaskOut:
         return TaskOut(
@@ -73,10 +90,18 @@ class DownloadTask:
             files=list(self.files),
             saved_path=self.saved_path,
             organized_path=self.organized_path,
+            episode=self.episode,
+            tags=list(self.tags),
+            subtitle_status=self.subtitle_status,
+            subtitle_path=self.subtitle_path,
+            subtitle_note=self.subtitle_note,
             error=self.error,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
+
+    def to_state(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 class Aria2Client:
@@ -131,14 +156,63 @@ class DownloadManager:
         self.cfg = cfg
         self.tasks: dict[str, DownloadTask] = {}
         self.aria2 = Aria2Client(cfg.downloader.aria2.rpc_url, cfg.downloader.aria2.rpc_secret)
-        self.organizer = Organizer(cfg.organize, cfg.download_root())
+        self.organizer = Organizer(cfg.organize, cfg.download_root(), cfg.library_root())
+        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm))
         self._poller: asyncio.Task | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._state_path = cfg.state_dir() / "tasks.json"
+        self._dirty = False
+        self._load_state()
+
+    # ---------- 状态持久化 ----------
+    @property
+    def state_path(self) -> Path:
+        return self._state_path
+
+    def _load_state(self) -> None:
+        try:
+            if not self._state_path.exists():
+                return
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return
+        entries = raw.get("tasks") if isinstance(raw, dict) else raw
+        if not isinstance(entries, list):
+            return
+        valid = {f.name for f in DownloadTask.__dataclass_fields__.values()}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            data = {k: v for k, v in entry.items() if k in valid}
+            if not data.get("task_id"):
+                continue
+            try:
+                task = DownloadTask(**data)
+            except TypeError:
+                continue
+            if task.status not in ("complete", "error"):
+                task.status = "interrupted"
+                task.error = task.error or "应用重启，下载会话已丢失，请重新添加任务"
+            self.tasks[task.task_id] = task
+
+    def _persist(self, force: bool = False) -> None:
+        if not force and not self._dirty:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"saved_at": _now(), "tasks": [t.to_state() for t in self.tasks.values()]}
+            tmp = self._state_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, self._state_path)
+            self._dirty = False
+        except OSError:
+            pass
 
     def apply_config(self, cfg: AppConfig) -> None:
-        """配置热更新：同步下载根目录、整理规则、aria2 RPC。"""
+        """配置热更新：同步下载根目录、整理规则、aria2 RPC、字幕设置。"""
         self.cfg = cfg
-        self.organizer = Organizer(cfg.organize, cfg.download_root())
+        self.organizer = Organizer(cfg.organize, cfg.download_root(), cfg.library_root())
+        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm))
         self.aria2 = Aria2Client(cfg.downloader.aria2.rpc_url, cfg.downloader.aria2.rpc_secret)
         try:
             cfg.download_root().mkdir(parents=True, exist_ok=True)
@@ -161,6 +235,7 @@ class DownloadManager:
         for t in list(self._background_tasks):
             t.cancel()
         self._background_tasks.clear()
+        self._persist(force=True)
 
     def list_tasks(self) -> list[TaskOut]:
         items = sorted(self.tasks.values(), key=lambda t: t.created_at, reverse=True)
@@ -175,6 +250,16 @@ class DownloadManager:
         task.add_done_callback(self._background_tasks.discard)
         return task
 
+    # ---------- 创建任务 ----------
+    def task_dir(self, task: DownloadTask) -> Path:
+        if not self.cfg.downloader.per_task_dir:
+            return self.cfg.incoming_dir()
+        if task.incoming_dir:
+            return Path(task.incoming_dir)
+        path = self.cfg.incoming_dir() / task.task_id
+        task.incoming_dir = str(path)
+        return path
+
     async def start_download(
         self,
         url: str,
@@ -182,6 +267,7 @@ class DownloadManager:
         year: int | None = None,
         quality: str = "",
         organize: dict[str, Any] | None = None,
+        fetch_subtitle: bool | None = None,
     ) -> DownloadTask:
         url = (url or "").strip()
         if not title:
@@ -206,8 +292,17 @@ class DownloadManager:
             created_at=_now(),
             updated_at=_now(),
             organize_opts=organize or {},
+            fetch_subtitle=(self.cfg.subtitle.enabled if fetch_subtitle is None else bool(fetch_subtitle)),
         )
+        task.tags = detect_tags(f"{title} {quality}")
+        season, episode = parse_episode(f"{title} {url}")
+        if episode is not None:
+            from ..organizer import episode_label
+
+            task.episode = episode_label(season, episode)
         self.tasks[task.task_id] = task
+        self._dirty = True
+        self._persist()
         self._spawn(self._run_task(task))
         return task
 
@@ -224,10 +319,9 @@ class DownloadManager:
     async def _run_task(self, task: DownloadTask) -> None:
         kind = self._classify(task.url)
         try:
+            aria2_ok = False
             if kind in ("magnet", "torrent", "http"):
                 aria2_ok = await self.aria2.is_available()
-            else:
-                aria2_ok = False
 
             if aria2_ok:
                 task.engine = "aria2"
@@ -242,17 +336,23 @@ class DownloadManager:
                     "请在飞牛上通过 Docker 部署本应用（镜像内置 aria2），或先配置 aria2 RPC。"
                 )
                 task.updated_at = _now()
+                self._dirty = True
+                self._persist()
         except Exception as exc:  # noqa: BLE001
             task.status = "error"
             task.error = str(exc)
             task.updated_at = _now()
+            self._dirty = True
+            self._persist()
 
-    async def _start_aria2(self, task: DownloadTask) -> None:
-        incoming = self.cfg.incoming_dir()
-        incoming.mkdir(parents=True, exist_ok=True)
+    def _aria2_options(self, task: DownloadTask) -> dict[str, Any]:
+        target = self.task_dir(task)
+        target.mkdir(parents=True, exist_ok=True)
         options: dict[str, Any] = {
-            "dir": str(incoming),
+            "dir": str(target),
+            # 不做种（防止 NAS 变 PCDN 节点）
             "seed-time": "0",
+            "seed-ratio": "0.0",
             "bt-max-peers": "64",
             "max-connection-per-server": "8",
             "split": "8",
@@ -260,18 +360,31 @@ class DownloadManager:
             "auto-file-renaming": "true",
             "allow-overwrite": "false",
             "file-allocation": "none",
+            "follow-torrent": "true",
+            "bt-save-metadata": "true",
+            "enable-dht": "true",
+            "bt-enable-lpd": "true",
         }
+        trackers = (self.cfg.downloader.bt_trackers or "").strip()
+        if trackers:
+            options["bt-tracker"] = trackers
+        options.update({str(k): str(v) for k, v in (self.cfg.downloader.extra_options or {}).items()})
+        return options
+
+    async def _start_aria2(self, task: DownloadTask) -> None:
+        options = self._aria2_options(task)
         gid = await self.aria2.add_uri([task.url], options)
         task.gid = gid
         task.status = "active"
         task.updated_at = _now()
+        self._dirty = True
 
     async def _start_http(self, task: DownloadTask) -> None:
-        incoming = self.cfg.incoming_dir()
-        incoming.mkdir(parents=True, exist_ok=True)
+        target = self.task_dir(task)
+        target.mkdir(parents=True, exist_ok=True)
         path = await download_http_to(
             task.url,
-            incoming,
+            target,
             preferred_name=task.title,
             on_progress=lambda done, total, speed: self._on_http_progress(task, done, total, speed),
         )
@@ -283,7 +396,9 @@ class DownloadManager:
         if path.exists():
             task.completed_length = task.total_length or _human_size(path.stat().st_size)
         task.updated_at = _now()
-        await self._organize_if_needed(task, [path] if path.exists() else [])
+        await self._finish_task(task, [path] if path.exists() else [])
+        self._dirty = True
+        self._persist()
 
     def _on_http_progress(self, task: DownloadTask, done: int, total: int, speed: float) -> None:
         task.completed_length = _human_size(done)
@@ -294,11 +409,14 @@ class DownloadManager:
         task.updated_at = _now()
 
     async def _poll_loop(self) -> None:
+        tick = 0
         while True:
             try:
                 await self._poll_once()
             except Exception:  # noqa: BLE001
                 pass
+            tick += 1
+            self._persist(force=(tick % 5 == 0))
             await asyncio.sleep(2)
 
     async def _poll_once(self) -> None:
@@ -307,7 +425,7 @@ class DownloadManager:
             for t in self.tasks.values()
             if t.engine == "aria2"
             and t.gid
-            and t.status in ("queued", "active", "paused", "waiting")
+            and t.status in ("queued", "active", "paused", "waiting", "interrupted")
         ]
         if not pending:
             return
@@ -316,10 +434,15 @@ class DownloadManager:
                 st = await self.aria2.tell_status(task.gid)
             except Exception as exc:  # noqa: BLE001
                 task.error = str(exc)
+                if task.status == "interrupted":
+                    task.error = "下载会话已丢失（应用重启后无法恢复），请重新添加任务"
+                continue
+            if not st:
                 continue
             status = str(st.get("status") or "")
             if status:
                 task.status = status
+                task.error = "" if status != "error" else task.error
             try:
                 total = int(st.get("totalLength") or 0)
             except (TypeError, ValueError):
@@ -350,81 +473,66 @@ class DownloadManager:
             if st.get("errorMessage"):
                 task.error = str(st.get("errorMessage"))
             task.updated_at = _now()
+            self._dirty = True
 
             if status == "complete":
-                paths = [Path(p) for p in file_paths if p and Path(p).exists()]
-                if not paths:
-                    paths = [p for p in self._scan_incoming_for_task(task)]
-                task.saved_path = str(paths[0].parent) if paths else str(self.cfg.incoming_dir())
-                await self._organize_if_needed(task, paths)
+                paths = self._collect_output_files(task, file_paths)
+                task.saved_path = str(paths[0].parent) if paths else self.task_dir(task)
                 task.status = "complete"
+                await self._finish_task(task, paths)
             elif status == "error":
                 task.status = "error"
                 if not task.error:
                     task.error = "下载失败"
 
-    @staticmethod
-    def _safe_mtime(p: Path) -> float:
+    def _collect_output_files(self, task: DownloadTask, file_paths: list[str]) -> list[Path]:
+        """优先用 aria2 报的准确文件列表；仅在缺失时回退到任务自己的目录扫描。"""
+        candidates: list[Path] = []
+        for raw in file_paths:
+            p = Path(raw)
+            if p.exists() and p.is_file() and not p.name.endswith(".aria2"):
+                candidates.append(p)
+        if not candidates:
+            root = self.task_dir(task)
+            if root.exists():
+                candidates = [
+                    p
+                    for p in root.rglob("*")
+                    if p.is_file() and not p.name.endswith(".aria2")
+                ]
+        return candidates
+
+    async def _finish_task(self, task: DownloadTask, paths: list[Path]) -> None:
+        """下载完成后的收尾：整理 + 字幕。任一步失败也不把任务判成失败。"""
+        video: Path | None = None
         try:
-            return p.stat().st_mtime
-        except OSError:
-            return 0.0
-
-    @staticmethod
-    def _safe_size(p: Path) -> int:
+            video = await self._organize_if_needed(task, paths)
+        except Exception as exc:  # noqa: BLE001
+            task.error = f"自动整理异常：{exc}"
         try:
-            return p.stat().st_size
-        except OSError:
-            return 0
+            await self._subtitle_if_needed(task, video)
+        except Exception as exc:  # noqa: BLE001
+            task.subtitle_status = "failed"
+            task.subtitle_note = f"字幕匹配异常：{exc}"
+        task.updated_at = _now()
+        self._dirty = True
+        self._persist(force=True)
 
-    def _scan_incoming_for_task(self, task: DownloadTask) -> list[Path]:
-        """尽量只返回与当前任务相关的文件，避免并发任务误整理。"""
-        root = self.cfg.incoming_dir()
-        if not root.exists():
-            return []
-        all_files: list[Path] = []
-        for p in root.rglob("*"):
-            try:
-                if p.is_file() and not p.name.endswith(".aria2"):
-                    all_files.append(p)
-            except OSError:
-                continue
-        all_files.sort(key=self._safe_mtime, reverse=True)
-
-        keywords = [w for w in (task.quality, str(task.year) if task.year else "", task.title) if w]
-        matched: list[Path] = []
-        for p in all_files:
-            name = p.name.lower()
-            if any(str(k).lower() in name for k in keywords if k):
-                matched.append(p)
-        return matched or all_files[:5]
-
-    async def _organize_if_needed(self, task: DownloadTask, paths: list[Path]) -> None:
-        opts = task.organize_opts or {}
+    async def _organize_if_needed(self, task: DownloadTask, paths: list[Path]) -> Path | None:
+        opts = dict(task.organize_opts or {})
         enabled = bool(opts.get("enabled", self.cfg.organize.enabled))
-        media_ext = {
-            ".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".ts", ".m2ts",
-            ".webm", ".rmvb", ".mpg", ".mpeg", ".iso",
-        }
-        if not enabled or not paths:
-            return
-        primary = None
-        for p in paths:
-            try:
-                if p.is_file() and p.suffix.lower() in media_ext:
-                    primary = p
-                    break
-            except OSError:
-                continue
-        if primary is None:
+        media = [p for p in paths if p.suffix.lower() in MEDIA_EXTS]
+        if media:
+            primary = max(media, key=self._safe_size)
+        else:
             files = [p for p in paths if p.is_file()]
             if not files:
-                return
-            if len(files) == 1:
-                primary = files[0]
-            else:
-                primary = max(files, key=self._safe_size)
+                return None
+            primary = max(files, key=self._safe_size)
+        task.saved_path = str(primary.parent)
 
+        if not enabled:
+            return primary
         try:
             # shutil.move/copy 是阻塞 IO，放到线程池避免卡住事件循环
             final = await asyncio.to_thread(
@@ -437,9 +545,66 @@ class DownloadManager:
             )
             task.organized_path = str(final)
             task.files = [str(final)]
+            return final
         except Exception as exc:  # noqa: BLE001
             task.error = f"下载完成，但自动整理失败：{exc}"
             task.organized_path = ""
+            return primary
+
+    async def _subtitle_if_needed(self, task: DownloadTask, video: Path | None) -> None:
+        if not task.fetch_subtitle:
+            task.subtitle_status = "skipped"
+            return
+        if video is None or not video.exists():
+            task.subtitle_status = "failed"
+            task.subtitle_note = "找不到视频文件，跳过字幕匹配"
+            return
+        if video.suffix.lower() not in MEDIA_EXTS:
+            task.subtitle_status = "skipped"
+            task.subtitle_note = "非视频文件，跳过字幕匹配"
+            return
+        task.subtitle_status = "searching"
+        self._dirty = True
+        result = await self.subtitle.fetch_for_video(
+            video, title=task.title, year=task.year, quality=task.quality
+        )
+        if result.ok:
+            task.subtitle_status = "done"
+            task.subtitle_path = result.files[0] if result.files else ""
+            task.subtitle_note = result.message
+        else:
+            task.subtitle_status = "failed"
+            task.subtitle_path = ""
+            task.subtitle_note = result.message
+
+    async def retry_subtitle(self, task: DownloadTask) -> TaskOut:
+        """手动重试字幕匹配（换关键词后再试）。"""
+        target = Path(task.organized_path or task.saved_path or "")
+        if target and target.is_file():
+            video = target
+        else:
+            video = None
+            for raw in task.files:
+                p = Path(raw)
+                if p.is_file() and p.suffix.lower() in MEDIA_EXTS:
+                    video = p
+                    break
+        if video is None:
+            task.subtitle_status = "failed"
+            task.subtitle_note = "找不到视频文件，无法匹配字幕"
+            return task.to_out()
+        task.fetch_subtitle = True
+        await self._subtitle_if_needed(task, video)
+        task.updated_at = _now()
+        self._persist(force=True)
+        return task.to_out()
+
+    @staticmethod
+    def _safe_size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
 
     async def aria2_status(self) -> dict[str, Any]:
         ok = await self.aria2.is_available()

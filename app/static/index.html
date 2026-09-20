@@ -46,11 +46,16 @@
               </select>
             </label>
             <button id="btn-search" class="btn primary" type="submit">搜索</button>
+            <button id="btn-best" class="btn best" type="button" title="按评分挑选最合适的一条（清晰度/做种/特性）">一键最优</button>
           </div>
           <div class="organize-row">
             <label class="check">
               <input id="org-enabled" type="checkbox" checked />
               下载完成后自动整理到电影文件夹
+            </label>
+            <label class="check">
+              <input id="sub-enabled" type="checkbox" checked />
+              完成后自动匹配中文字幕
             </label>
             <label class="field inline">
               <span>整理预览</span>
@@ -67,8 +72,7 @@
         <div class="panel-head">
           <h2>下载任务</h2>
           <button id="btn-refresh-tasks" class="btn ghost" type="button">刷新</button>
-        </div>
-        <div id="tasks" class="tasks">
+        </div>        <div id="tasks" class="tasks">
           <div class="empty">暂无任务。检索后选择一条片源开始下载。</div>
         </div>
       </section>
@@ -117,12 +121,39 @@
           <input id="cfg-file-template" type="text" placeholder="{title} ({year}) - {quality}" />
         </label>
         <label class="field">
+          <span>剧集文件夹模板</span>
+          <input id="cfg-series-dir-template" type="text" placeholder="{title} ({year})/Season {season}" />
+        </label>
+        <label class="field">
+          <span>剧集文件名模板</span>
+          <input id="cfg-series-file-template" type="text" placeholder="{title} ({year}) - S{season}E{episode} - {quality}" />
+        </label>
+        <label class="field">
+          <span>资料库目录（留空=下载根目录）</span>
+          <input id="cfg-library-root" type="text" placeholder="例如 /vol2/1000/movie" />
+        </label>
+        <label class="field">
           <span>整理方式</span>
           <select id="cfg-org-mode">
             <option value="move">移动（推荐）</option>
             <option value="copy">复制</option>
             <option value="hardlink">硬链接（省空间）</option>
           </select>
+        </label>
+
+        <h4>字幕（SubHD）</h4>
+        <p class="hint">下载完成后自动按片名匹配中文字幕，优先简英双语 / ASS 特效，并重命名成与视频同名的 <code>.zh.ass</code>。</p>
+        <label class="check">
+          <input id="cfg-sub-enabled" type="checkbox" />
+          启用自动字幕
+        </label>
+        <label class="check">
+          <input id="cfg-sub-bilingual" type="checkbox" />
+          优先双语字幕
+        </label>
+        <label class="field">
+          <span>补充关键词（逗号分隔，用于大陆/台湾译名差异）</span>
+          <input id="cfg-sub-keywords" type="text" placeholder="机器人总动员、美食总动员" />
         </label>
 
         <h4>检索源</h4>
@@ -162,6 +193,10 @@
         <label class="check">
           <input id="dl-organize" type="checkbox" checked />
           下载完成后自动整理
+        </label>
+        <label class="check">
+          <input id="dl-subtitle" type="checkbox" checked />
+          完成后自动匹配中文字幕
         </label>
         <div class="btn-row">
           <button id="btn-start-download" class="btn primary" type="button">开始下载</button>

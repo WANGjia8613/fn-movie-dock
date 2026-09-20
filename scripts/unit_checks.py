@@ -1,0 +1,214 @@
+# -*- coding: utf-8 -*-
+"""新增功能的本地单元回归（不联网，纯逻辑层）。
+
+覆盖：剧集识别 / 整理增强 / 候选评分 / qBittorrent 结果映射 /
+字幕条目打分与关键词 / 归档解压 / 任务状态持久化。
+"""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+TMP = Path(tempfile.mkdtemp(prefix="moviedock-unit-"))
+os.environ["MOVIE_DOCK_CONFIG"] = str(TMP / "config.yaml")
+
+from app.config import OrganizeConfig, ProviderConfig, load_config, save_app_config  # noqa: E402
+from app.downloader.manager import DownloadManager, DownloadTask  # noqa: E402
+from app.models import SourceItem  # noqa: E402
+from app.organizer import Organizer, episode_label, parse_episode  # noqa: E402
+from app.ranking import best_source, detect_tags, sort_by_score  # noqa: E402
+from app.search.qbittorrent import QBittorrentProvider  # noqa: E402
+from app.subtitle.extract import extract_archive, find_subtitle_files  # noqa: E402
+from app.subtitle.manager import SubtitleService, tokens_from_video  # noqa: E402
+from app.subtitle.subhd import SubHDEntry  # noqa: E402
+
+results: list[tuple[str, str, str]] = []
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    results.append((name, "PASS" if cond else "FAIL", str(detail)))
+
+
+# ---------- 1) 剧集识别 ----------
+cases = {
+    "Show.S01E02.1080p.WEB-DL": (1, 2),
+    "show.s1e2": (1, 2),
+    "Show.1x03.720p": (1, 3),
+    "剧集名称.第5集.HD": (1, 5),
+    "Show.E07.2160p": (1, 7),
+    "WALL-E.2008.2160p.UHD.BDRemux.HDR.DoVi.P8.Hybrid.by.DVT": (None, None),
+}
+ok = True
+detail = []
+for text, expect in cases.items():
+    got = parse_episode(text)
+    detail.append(f"{text}->{got}")
+    if got != expect:
+        ok = False
+check("parse_episode", ok, "; ".join(detail))
+check("episode_label", episode_label(1, 2) == "S01E02" and episode_label(None, None) == "",
+      f"{episode_label(1, 2)}/{episode_label(None, None)}")
+
+# ---------- 2) 整理增强：扩展名保留 / 剧集模板 / library_root ----------
+with tempfile.TemporaryDirectory() as td:
+    td_path = Path(td)
+    src = td_path / "raw" / "Show.S01E02.2160p.WEB-DL.mp4"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"x" * 32)
+    org = Organizer(OrganizeConfig(enabled=True, mode="copy"), td_path / "dl")
+    final = org.organize_file(src, title="示例剧集", year=2024, quality="2160p",
+                              options={"enabled": True, "mode": "copy"})
+    check("organize_series_path", "Season 01" in str(final) and final.name.endswith(".mp4"), str(final))
+    check("organize_series_name", "S01E02" in final.name, final.name)
+    check("organize_series_nested", "/Season 01/" in str(final).replace("\\", "/"), str(final))
+
+    # 电影 + 自定义资料库目录（模拟 /vol2/1000/movie）
+    movie = td_path / "raw" / "WALL-E.2008.2160p.BDRemux.mkv"
+    movie.write_bytes(b"y" * 32)
+    lib = td_path / "library"
+    final2 = org.organize_file(movie, title="WALL-E", year=2008, quality="2160p",
+                               options={"enabled": True, "mode": "copy", "library_root": str(lib)})
+    check("organize_library_root", str(final2).startswith(str(lib / "WALL-E (2008)")), str(final2))
+
+    # 预览路径带扩展名（旧版硬写 .mkv）
+    dest_dir, dest = org.build_paths(title="沙丘2", year=2024, quality="1080p", ext=".mp4")
+    check("preview_ext", dest.name == "沙丘2 (2024) - 1080p.mp4", dest.name)
+
+# ---------- 3) 候选评分与排序 ----------
+wall_e_4k = SourceItem(
+    id="a", title="WALL-E.2008.2160p.UHD.BDRemux.HDR.DoVi.P8.Hybrid.by.DVT", quality="2160p",
+    resolution="2160p", size="38.2 GB", seeds=19, url="magnet:?xt=urn:btih:aaa", url_type="magnet")
+wall_e_1080 = SourceItem(
+    id="b", title="WALL-E.2008.1080p.BluRay.x264.TrueHD.7.1.Atmos-SWTYBLZ", quality="1080p",
+    resolution="1080p", size="12 GB", seeds=180, url="magnet:?xt=urn:btih:bbb", url_type="magnet")
+fake_4k = SourceItem(
+    id="c", title="WALL-E.2008.2160p.WEB-DL.x265", quality="2160p", resolution="2160p",
+    size="1.2 GB", seeds=3, url="magnet:?xt=urn:btih:ccc", url_type="magnet")
+ranked = sort_by_score([wall_e_1080, fake_4k, wall_e_4k], prefer_resolution="2160p")
+check("ranking_top_is_4k_remux", ranked[0].id == "a", [f"{i.id}:{i.score}" for i in ranked])
+check("ranking_penalizes_tiny_4k", ranked[-1].id == "c", [f"{i.id}:{i.score}" for i in ranked])
+check("ranking_best_source", (best_source(ranked) or ranked[0]).id == "a", "best")
+tags = detect_tags("WALL-E.2008.2160p.UHD.BDRemux.HDR.DoVi.P8.Hybrid.by.DVT")
+check("detect_tags", "DoVi" in tags and "HDR" in tags and "BDRemux" in tags, str(tags))
+
+# ---------- 4) qBittorrent 结果映射 ----------
+pc = ProviderConfig(type="qbittorrent", enabled=True, name="qB", url="http://127.0.0.1:8085",
+                    options={"username": "admin", "password": "x", "plugins": "yts,bt4g"})
+qbt = QBittorrentProvider(pc)
+item = qbt._to_item({
+    "fileName": "沙丘2.Dune.Part.Two.2024.2160p.BluRay.REMUX.DoVi.HDR.mkv",
+    "fileUrl": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+    "fileSize": 12 * 1024**3,
+    "nbSeeders": 56,
+    "nbLeechers": 8,
+    "siteUrl": "bt4g",
+    "pubDate": "2024-05-01T00:00:00Z",
+}, 0)
+check("qbt_map_quality", item.quality == "4K" and item.resolution == "2160p", f"{item.resolution}/{item.quality}")
+check("qbt_map_size_seeds", item.size.startswith("12.00 GB") and item.seeds == 56, f"{item.size}/{item.seeds}")
+check("qbt_map_type", item.url_type == "magnet", item.url_type)
+
+# ---------- 5) 字幕：关键词 / 打分 / 命名 ----------
+cfg = load_config(TMP / "config.yaml")
+cfg.subtitle.extra_keywords = ["机器人总动员", "瓦力"]
+service = SubtitleService(cfg.subtitle)
+video = ROOT / "downloads" / "WALL-E.2008.2160p.UHD.BDRemux.HDR.DoVi.P8.Hybrid.by.DVT.mkv"
+kw = service._keyword_candidates(video, "", 2008)
+check("subtitle_keywords_extra", "机器人总动员" in kw and "瓦力" in kw, str(kw[:4]))
+check("subtitle_keywords_english", any("WALL E" in k for k in kw), str(kw[:5]))
+tokens = tokens_from_video(video)
+check("subtitle_tokens", "2160p" in tokens and "uhd" in tokens and "dvt" in tokens, str(tokens))
+
+from app.subtitle.manager import _score_entry, _score_sub_file  # noqa: E402
+
+ass_bilingual = SubHDEntry(sid="1", title="WALL-E.2008.2160p.UHD.BluRay.4K适配HDR 简英双语", fmt="ASS")
+srt_only = SubHDEntry(sid="2", title="WALL-E.2008.1080p.BluRay", fmt="SRT")
+check("subtitle_entry_prefers_ass_bilingual",
+      _score_entry(ass_bilingual, tokens, True) > _score_entry(srt_only, tokens, True),
+      f"{_score_entry(ass_bilingual, tokens, True)} vs {_score_entry(srt_only, tokens, True)}")
+check("subtitle_file_rank", _score_sub_file(Path("x.zh.ass")) > _score_sub_file(Path("x.eng.srt")), "ass>.eng.srt")
+name = cfg.subtitle.name_template.format(video=video.stem)
+check("subtitle_name_template", name.endswith(".zh") and "DVT" in name, name)
+
+# ---------- 6) 归档解压（zip 含中文名 / rar 兜底） ----------
+with tempfile.TemporaryDirectory() as td:
+    td_path = Path(td)
+    arch = td_path / "sub.zip"
+    with zipfile.ZipFile(arch, "w") as z:
+        z.writestr("机器人总动员.WALL.E.2008.2160p.zh.ass", "[Script Info]\nTitle: t\n")
+    out = td_path / "out"
+    files = extract_archive(arch, out)
+    check("extract_zip", len(find_subtitle_files(out)) == 1, str([f.name for f in files]))
+
+    # rar 场景：本机若有 7z/bsdtar 才能解，这里只验证“失败会给出明确报错”或解压成功
+    rar = td_path / "broken.rar"
+    rar.write_bytes(b"Rar!\x1a\x07\x00" + b"\x00" * 64)
+    try:
+        extract_archive(rar, td_path / "out2")
+        check("extract_rar_path", True, "解压成功（工具可用）")
+    except Exception as exc:  # noqa: BLE001
+        check("extract_rar_path", "解压失败" in str(exc) or "7z" in str(exc) or "bsdtar" in str(exc), str(exc)[:80])
+
+# ---------- 7) 任务状态持久化 + per-task 目录 + aria2 选项 ----------
+cfg = load_config(TMP / "config.yaml")
+cfg.paths.download_root = str(TMP / "dl")
+cfg.paths.state_dir = str(TMP / "data")
+cfg.subtitle.enabled = False
+cfg.downloader.bt_trackers = "udp://tracker.example:1337/announce"
+save_app_config(cfg)
+cfg = load_config(TMP / "config.yaml")
+
+mgr = DownloadManager(cfg)
+mgr.tasks["active1"] = DownloadTask(task_id="active1", title="进行中", url="magnet:?xt=urn:btih:1",
+                                    status="active", gid="g1", created_at="2026-01-01T00:00:00+08:00")
+mgr.tasks["done1"] = DownloadTask(task_id="done1", title="已完成", url="magnet:?xt=urn:btih:2",
+                                  status="complete", created_at="2026-01-02T00:00:00+08:00",
+                                  organized_path=str(TMP / "dl" / "movies" / "x.mkv"),
+                                  subtitle_status="done", subtitle_path="/x/x.zh.ass",
+                                  subtitle_note="测试字幕")
+mgr._dirty = True
+mgr._persist(force=True)
+
+mgr2 = DownloadManager(cfg)
+check("persist_keeps_complete", (mgr2.get("done1") or DownloadTask(task_id="?")).status == "complete",
+      str(getattr(mgr2.get("done1"), "status", None)))
+check("persist_marks_interrupted", getattr(mgr2.get("active1"), "status", "") == "interrupted",
+      str(getattr(mgr2.get("active1"), "status", "")))
+check("persist_subtitle_fields", getattr(mgr2.get("done1"), "subtitle_path", "") == "/x/x.zh.ass",
+      str(getattr(mgr2.get("done1"), "subtitle_path", "")))
+
+task = DownloadTask(task_id="dir1", title="t", url="magnet:?xt=urn:btih:3")
+opts = mgr2._aria2_options(task)
+check("aria2_no_seed", opts.get("seed-time") == "0" and opts.get("seed-ratio") == "0.0", str(opts.get("seed-time")))
+check("aria2_tracker", opts.get("bt-tracker", "").startswith("udp://tracker.example"), str(opts.get("bt-tracker")))
+check("aria2_per_task_dir", str(opts["dir"]).endswith("dir1") and "incoming" in str(opts["dir"]), str(opts["dir"]))
+
+# ---------- 8) 配置往返（新增字段不丢） ----------
+custom = next(p for p in cfg.search.providers if p.type == "custom_api")
+custom.options = {"foo": "bar"}
+cfg.organize.library_root = "/vol2/1000/movie"
+cfg.subtitle.match_hint = "4K适配HDR"
+save_app_config(cfg)
+cfg_reload = load_config(TMP / "config.yaml")
+check("config_options_roundtrip",
+      next(p for p in cfg_reload.search.providers if p.type == "custom_api").options.get("foo") == "bar",
+      str([p.options for p in cfg_reload.search.providers if p.type == "custom_api"]))
+check("config_library_root", cfg_reload.organize.library_root == "/vol2/1000/movie", cfg_reload.organize.library_root)
+check("config_subtitle_hint", cfg_reload.subtitle.match_hint == "4K适配HDR", cfg_reload.subtitle.match_hint)
+
+# ---------- 输出 ----------
+print("=" * 68)
+failed = 0
+for name, status, detail in results:
+    print(f"[{status}] {name} :: {detail}")
+    if status == "FAIL":
+        failed += 1
+print("=" * 68)
+print(f"TOTAL={len(results)} FAIL={failed}")
+sys.exit(1 if failed else 0)

@@ -15,15 +15,32 @@ llm:
 paths:
   # 容器内下载根目录，对应 compose 里挂载的飞牛共享目录
   download_root: "/downloads"
+  # 任务状态落盘目录（容器重启后任务列表不丢）
+  state_dir: "/data"
 
 search:
+  # 是否按评分排序候选（清晰度 + 做种数 + HDR/DoVi 等特性）
+  sort_by_score: true
   providers:
     - type: demo
-      enabled: true
+      enabled: false
       name: "演示数据"
     - type: llm
-      enabled: true
+      enabled: false
       name: "大模型检索"
+    # 推荐：复用本机 qBittorrent 的搜索插件（yts/bt4g/kickass…），结果真实可用
+    - type: qbittorrent
+      enabled: true
+      name: "qBittorrent 搜索"
+      url: "http://127.0.0.1:8085"
+      options:
+        username: "admin"
+        password: ""
+        # 留空=全部插件（可能被某个慢插件拖住）；建议固定几个快的
+        plugins: "yts,yts_am,bt4g,limetorrents,kickass_torrent,torrentfunk"
+        category: "all"
+        limit: "100"
+        search_timeout: "45"
     - type: custom_api
       enabled: false
       name: "自定义索引"
@@ -37,8 +54,15 @@ organize:
   # {title} {year} {quality} {resolution} {ext}
   movie_dir_template: "{title} ({year})"
   file_name_template: "{title} ({year}) - {quality}"
+  # 剧集模板（识别到 S01E02 / 第2集 / 1x02 时使用）
+  series_dir_template: "{title} ({year})/Season {season}"
+  series_file_template: "{title} ({year}) - S{season}E{episode} - {quality}"
   mode: "move"  # move | copy | hardlink
   unknown_year: "未知年份"
+  movies_subdir: "movies"
+  # 资料库根目录：留空 = download_root/movies；
+  # 填了则整理结果直接落到该目录（可指向已有电影库，配合 hardlink 零拷贝）
+  library_root: ""
 
 downloader:
   engine: "aria2"
@@ -48,3 +72,25 @@ downloader:
   max_concurrent: 3
   # 解析结果里磁力/直链的默认保存子目录
   category_dir: "incoming"
+  # 每个任务用独立子目录 incoming/<task_id>/，避免并发任务互相整理错文件
+  per_task_dir: true
+  # BT tracker（逗号分隔，留空不下发；容器里也可用环境变量 BT_TRACKERS）
+  bt_trackers: ""
+  # aria2 附加选项（原样合并进 addUri options）
+  extra_options: {}
+
+subtitle:
+  # 下载完成后自动匹配中文字幕（SubHD），并重命名成与视频同名的 .zh.ass
+  enabled: true
+  provider: "subhd"
+  # 大陆/台湾译名差异的补充关键词，例如 ["机器人总动员", "美食总动员"]
+  extra_keywords: []
+  # 指定优先匹配的字幕条目关键词（留空=自动）
+  match_hint: ""
+  prefer_bilingual: true
+  name_template: "{video}.zh"
+  # 解压工具（按顺序尝试；容器内已装 7z + bsdtar）
+  extract_tools: ["7z", "7zz", "bsdtar", "unrar", "unar"]
+  timeout_seconds: 30
+  # 找不到字幕时任务仍是「已完成」，只在卡片上提示
+  soft_fail: true

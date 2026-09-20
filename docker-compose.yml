@@ -12,7 +12,7 @@
 services:
   movie-dock:
     build: .
-    image: movie-dock:0.1.1
+    image: movie-dock:0.1.2
     container_name: movie-dock
     restart: unless-stopped
     ports:
@@ -21,12 +21,18 @@ services:
       # 一般请在网页「设置」里配置大模型，不要在这里写 Key
       # （环境变量优先级高于 /config/config.yaml）
       DOWNLOAD_ROOT: /downloads
+      STATE_DIR: /data
       ARIA2_RPC_URL: http://127.0.0.1:6800/jsonrpc
       SERVER_PORT: "8090"
       # MAX_CONCURRENT: "3"
       # ARIA2_RPC_SECRET: ""
+      # 可选：全局 BT tracker（逗号分隔）
+      # BT_TRACKERS: "udp://tracker.opentrackr.org:1337/announce,udp://open.tracker.cl:1337/announce"
     volumes:
       # === 请按你的飞牛共享目录修改 ===
       - /vol1/apps/fn-movie-dock/config:/config
+      # 下载临时目录（建议单独放在空间充裕的存储空间）
       - /vol1/media:/downloads
       - /vol1/apps/fn-movie-dock/data:/data
+      # 可选：已有电影库直挂（配合设置里的「资料库目录」，可直接落库/硬链接）
+      # - /vol2/1000/movie:/library

@@ -8,6 +8,10 @@
 
 ---
 
+> **本仓库为改进版（0.1.2）**：在原版基础上补上了「真实可用的检索源 + 自动中文字幕 +
+> 剧集整理 + 候选评分/一键最优 + 任务持久化」等能力，改动清单见 [CHANGES.md](CHANGES.md)。
+> 原项目：<https://github.com/WANGjia8613/fn-movie-dock>（无 LICENSE，本改进版仅供个人自用，请勿公开分发）。
+
 ## 目录
 
 1. [功能一览](#1-功能一览)
@@ -425,3 +429,97 @@ fn-movie-dock/
 3. 任务卡片上的错误信息  
 
 便于定位是网络、模型接口还是下载引擎问题。
+
+---
+
+## 12. 本改进版新增能力（0.1.2）
+
+### 12.1 qBittorrent 检索源（推荐默认用这个）
+
+原版的检索源里，演示数据是假的、大模型容易编链接。本版新增 `qbittorrent` provider：
+直接复用本机 qBittorrent 的搜索插件（yts / bt4g / kickass / limetorrents …），结果是**真实可用**的磁力/种子。
+
+```yaml
+search:
+  providers:
+    - type: qbittorrent
+      enabled: true
+      name: "qBittorrent 搜索"
+      url: "http://127.0.0.1:8085"      # qB WebUI 地址
+      options:
+        username: "admin"
+        password: "******"
+        plugins: "yts,yts_am,bt4g,limetorrents,kickass_torrent"   # 留空=全部（容易被慢插件拖住）
+        limit: "100"
+        search_timeout: "45"
+```
+
+要点：
+- 需要先在 qBittorrent「搜索」页**安装搜索插件**，否则会提示未检测到插件
+- 一个插件卡住会拖慢整次搜索 → 建议固定几个快的；内置默认推荐列表见代码常量 `DEFAULT_PLUGIN_HINT`
+- 搜索结束会自动 `stop` + `delete` 搜索任务，不在 qB 里留垃圾
+
+### 12.2 候选评分与「一键最优」
+
+- 后端按 **清晰度 + 做种数 + 特性标签（DoVi/HDR/REMUX/Atmos…）+ 体积合理性** 打分
+- 界面候选卡片显示 `评分 / DoVi / HDR / 做种 / 体积` 标签，最高分那条打「推荐」标记
+- 搜索框旁「一键最优」按钮：直接用最高分候选打开下载弹窗
+- 体积过小的 4K（<6GB）会被明显扣分，避免选到假种/低码率
+
+### 12.3 下载完成后自动配中文字幕
+
+- 来源 SubHD，流程：片名 → 字幕条目 → 下载 → 解压 → 挑最佳 → 改名成 `<视频名>.zh.ass` 放视频同目录
+- 选择策略：优先 **简体/双语、ASS 特效**；条目里命中片源特征（2160p/UHD/BDRemux/发布组…）加分
+- 防配错：英文关键词搜到的是同系列短片/别名时（例如用 `WALL-E` 搜到《电焊工波力》），
+  若条目里找不到任何片源特征就**跳过不配**，而不是配一个错的
+- 支持 **.rar / .7z 归档**（容器内已装 `p7zip-full` + `libarchive-tools`，rar5 也能读）
+- 字幕文本非 UTF-8（GBK/Big5）会自动转 UTF-8
+- 大陆/台湾译名差异：配置 `subtitle.extra_keywords`（如 `["机器人总动员"]`）；
+  若配了大模型且候选里全是英文，还会**自动让模型补中文译名**再搜
+- 任务卡片显示「字幕已配好 / 未匹配到字幕」，失败可点「重试字幕」
+
+```yaml
+subtitle:
+  enabled: true
+  extra_keywords: []
+  prefer_bilingual: true
+  name_template: "{video}.zh"
+  llm_translate: true
+  max_movies: 2
+```
+
+### 12.4 整理增强：剧集 / 资料库直落 / 扩展名
+
+- 识别 `S01E02`、`s1e2`、`1x03`、`第5集`、`E07` → 走剧集模板
+  （默认 `{title} ({year})/Season {season}` + `{title} ({year}) - S{season}E{episode} - {quality}`）
+- 修正原版 preview 硬写 `.mkv` 的问题，**保留原扩展名**（.mp4/.ts/.iso…）
+- 新增 `organize.library_root`：整理结果可直接落到已有电影库（如 `/vol2/1000/movie`），
+  配合 `mode: hardlink` 可零拷贝入库
+
+### 12.5 下载与任务健壮性
+
+- **每个任务独立子目录** `incoming/<task_id>/`：修掉原版并发任务「按文件名猜该整理谁」的误整理风险
+- 整理文件优先级：aria2 回报的准确文件列表 → 任务自己的目录兜底
+- **任务状态落盘** `/data/tasks.json`：容器重启后任务列表不丢；重启后丢失的下载任务标记为「已中断」并给出提示
+- aria2 参数补强：`seed-time=0`/`seed-ratio=0`（不做种，防 PCDN）、DHT、LPD、BT tracker（`downloader.bt_trackers`）、
+  `extra_options` 可透传任意 aria2 参数
+
+### 12.6 新增/变更 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/provider-types` | 检索源类型中文名 |
+| POST | `/api/tasks/{task_id}/subtitle` | 重试字幕匹配 |
+| GET | `/api/subtitle/candidates?keyword=` | 列出 SubHD 字幕条目（人工核对用） |
+| GET | `/api/config` | 新增 `subtitle`、`search_sort_by_score` 字段 |
+| POST | `/api/search` | 返回 `tags` / `score` / `best_id` |
+| POST | `/api/download` | 新增 `fetch_subtitle` |
+| POST | `/api/organize/preview` | 支持 `episode_text` / `ext`，返回 `is_series` |
+
+### 12.7 回归测试
+
+```bash
+python scripts/review_checks.py   # 原版回归（22 项）
+python scripts/unit_checks.py     # 本版新增功能（31 项）
+python scripts/smoke_local.py     # 冒烟（起本地服务跑真实 API）
+```

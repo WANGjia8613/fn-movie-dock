@@ -5,6 +5,8 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const state = {
   config: null,
   pendingDownload: null,
+  lastResults: [],
+  bestId: "",
   taskTimer: null,
 };
 
@@ -39,9 +41,20 @@ function statusText(s) {
     paused: "已暂停",
     complete: "已完成",
     error: "失败",
+    interrupted: "已中断",
     removed: "已移除",
   };
   return map[s] || s || "未知";
+}
+
+function subtitleText(s) {
+  const map = {
+    done: "字幕已配好",
+    searching: "字幕匹配中",
+    failed: "未匹配到字幕",
+    skipped: "未启用字幕",
+  };
+  return map[s] || "";
 }
 
 function showToast(msg, type = "info") {
@@ -68,27 +81,48 @@ function showToast(msg, type = "info") {
   el._t = setTimeout(() => { el.hidden = true; }, 3200);
 }
 
+const PROVIDER_LABELS = {
+  demo: "演示数据",
+  llm: "大模型检索",
+  qbittorrent: "qBittorrent 搜索",
+  custom_api: "自定义索引",
+};
+
 async function loadConfig() {
   const cfg = await api("/api/config");
   state.config = cfg;
   $("#cfg-base-url").value = cfg.llm.base_url || "";
   $("#cfg-api-key").value = cfg.llm.api_key || "";
   $("#cfg-model").value = cfg.llm.model || "";
-  $("#cfg-dir-template").value = cfg.organize.movie_dir_template || "{title} ({year})";
-  $("#cfg-file-template").value = cfg.organize.file_name_template || "{title} ({year}) - {quality}";
-  $("#cfg-org-mode").value = cfg.organize.mode || "move";
-  $("#org-enabled").checked = cfg.organize.enabled !== false;
+  const org = cfg.organize || {};
+  $("#cfg-dir-template").value = org.movie_dir_template || "{title} ({year})";
+  $("#cfg-file-template").value = org.file_name_template || "{title} ({year}) - {quality}";
+  $("#cfg-series-dir-template").value = org.series_dir_template || "{title} ({year})/Season {season}";
+  $("#cfg-series-file-template").value = org.series_file_template || "{title} ({year}) - S{season}E{episode} - {quality}";
+  $("#cfg-library-root").value = org.library_root || "";
+  $("#cfg-org-mode").value = org.mode || "move";
+  $("#org-enabled").checked = org.enabled !== false;
+
+  const sub = cfg.subtitle || {};
+  $("#cfg-sub-enabled").checked = sub.enabled !== false;
+  $("#cfg-sub-bilingual").checked = sub.prefer_bilingual !== false;
+  $("#cfg-sub-keywords").value = (sub.extra_keywords || []).join("、");
+  $("#sub-enabled").checked = sub.enabled !== false;
+
   $("#download-root").textContent = `下载根目录：${cfg.download_root || "-"}`;
-  $("#cfg-env").textContent = `下载根目录：${cfg.download_root || "-"} · aria2 RPC：${cfg.aria2_rpc_url || "-"}`;
+  $("#cfg-env").textContent =
+    `下载根目录：${cfg.download_root || "-"} · 资料库：${org.library_root || "（同下载根目录）"} · aria2 RPC：${cfg.aria2_rpc_url || "-"}`;
 
   const box = $("#cfg-providers");
   box.innerHTML = "";
   (cfg.search_providers || []).forEach((p, idx) => {
     const row = document.createElement("div");
     row.className = "provider";
-    const typeLabel = { demo: "演示数据", llm: "大模型检索", custom_api: "自定义索引" }[p.type] || p.type;
-    const extra = p.type === "custom_api"
-      ? `
+    const typeLabel = PROVIDER_LABELS[p.type] || p.type;
+    const opts = p.options || {};
+    let extra = "";
+    if (p.type === "custom_api") {
+      extra = `
         <label class="field" style="margin-top:8px">
           <span>名称</span>
           <input type="text" data-provider-name="${idx}" value="${escapeHtml(p.name || "")}" placeholder="自定义索引" />
@@ -104,8 +138,28 @@ async function loadConfig() {
             <option value="POST" ${String(p.method || "GET").toUpperCase() === "POST" ? "selected" : ""}>POST</option>
           </select>
         </label>
-      `
-      : "";
+      `;
+    } else if (p.type === "qbittorrent") {
+      extra = `
+        <label class="field" style="margin-top:8px">
+          <span>WebUI 地址</span>
+          <input type="text" data-provider-url="${idx}" value="${escapeHtml(p.url || "")}" placeholder="http://127.0.0.1:8085" />
+        </label>
+        <label class="field" style="margin-top:8px">
+          <span>用户名</span>
+          <input type="text" data-qbt-opt="${idx}" data-opt-key="username" value="${escapeHtml(opts.username || "")}" placeholder="admin" />
+        </label>
+        <label class="field" style="margin-top:8px">
+          <span>密码</span>
+          <input type="password" data-qbt-opt="${idx}" data-opt-key="password" value="${escapeHtml(opts.password || "")}" autocomplete="off" />
+        </label>
+        <label class="field" style="margin-top:8px">
+          <span>插件（逗号分隔，留空=全部；建议固定几个快的）</span>
+          <input type="text" data-qbt-opt="${idx}" data-opt-key="plugins" value="${escapeHtml(opts.plugins || "")}"
+                 placeholder="yts,bt4g,kickass_torrent,limetorrents" />
+        </label>
+      `;
+    }
     row.innerHTML = `
       <div style="flex:1">
         <div class="name">${escapeHtml(p.name || typeLabel)}</div>
@@ -161,10 +215,12 @@ async function refreshOrganizePreview() {
   }
 }
 
-function renderResults(items, warnings, providers) {
+function renderResults(items, warnings, providers, bestId) {
   const warnBox = $("#search-warnings");
   const meta = $("#search-meta");
   const box = $("#results");
+  state.lastResults = items || [];
+  state.bestId = bestId || "";
 
   if (warnings && warnings.length) {
     warnBox.hidden = false;
@@ -175,25 +231,29 @@ function renderResults(items, warnings, providers) {
   }
 
   meta.hidden = false;
-  meta.textContent = `共 ${items.length} 条候选 · 来源：${(providers || []).join("、") || "无"}`;
+  meta.textContent = `共 ${items.length} 条候选（按评分排序）· 来源：${(providers || []).join("、") || "无"}`;
 
   if (!items.length) {
-    box.innerHTML = `<div class="empty">没有检索到候选。可启用「演示数据」验证流程，或配置大模型 / 自定义索引 API，也可以在下载弹窗中手动粘贴磁力链接。</div>`;
+    box.innerHTML = `<div class="empty">没有检索到候选。可启用「qBittorrent 搜索」（复用本机 qB 的搜索插件）、配置自定义索引 API，也可以在下载弹窗中手动粘贴磁力链接。</div>`;
     return;
   }
 
   box.innerHTML = items.map((it) => {
     const tags = [];
     tags.push(`<span class="tag">${escapeHtml(it.quality || "未知")}</span>`);
+    (it.tags || []).forEach((t) => tags.push(`<span class="tag feat">${escapeHtml(t)}</span>`));
     if (it.size) tags.push(`<span class="tag gray">${escapeHtml(it.size)}</span>`);
     if (it.seeds != null) tags.push(`<span class="tag green">做种 ${escapeHtml(it.seeds)}</span>`);
     if (it.peers != null) tags.push(`<span class="tag gray">同伴 ${escapeHtml(it.peers)}</span>`);
+    if (it.score) tags.push(`<span class="tag score">评分 ${escapeHtml(it.score)}</span>`);
     tags.push(`<span class="tag gray">${escapeHtml(it.url_type || "unknown")}</span>`);
     tags.push(`<span class="tag gray">${escapeHtml(it.source || "")}</span>`);
     return `
-      <article class="result" data-id="${escapeHtml(it.id)}">
+      <article class="result ${it.id === state.bestId ? "result-best" : ""}" data-id="${escapeHtml(it.id)}">
         <div class="result-top">
-          <div class="result-title">${escapeHtml(it.title)}</div>
+          <div class="result-title">${escapeHtml(it.title)}${
+            it.id === state.bestId ? ` <span class="best-flag">推荐</span>` : ""
+          }</div>
         </div>
         <div class="tags">${tags.join("")}</div>
         ${it.note ? `<div class="result-note">${escapeHtml(it.note)}</div>` : ""}
@@ -230,6 +290,7 @@ function openDownloadModal(payload) {
   $("#dl-quality").value = payload.quality || "";
   $("#dl-url").value = payload.url || "";
   $("#dl-organize").checked = $("#org-enabled").checked;
+  $("#dl-subtitle").checked = $("#sub-enabled").checked;
   $("#modal-download").hidden = false;
 }
 
@@ -248,7 +309,7 @@ async function doSearch(ev) {
       quality: $("#quality").value || null,
     };
     const data = await api("/api/search", { method: "POST", body: JSON.stringify(body) });
-    renderResults(data.items || [], data.warnings || [], data.providers || []);
+    renderResults(data.items || [], data.warnings || [], data.providers || [], data.best_id || "");
   } catch (err) {
     showToast(err.message || "检索失败", "err");
     $("#results").innerHTML = `<div class="empty">检索失败：${escapeHtml(err.message || "")}</div>`;
@@ -256,6 +317,23 @@ async function doSearch(ev) {
     btn.disabled = false;
     btn.textContent = "搜索";
   }
+}
+
+function pickBest() {
+  const items = state.lastResults || [];
+  if (!items.length) {
+    showToast("还没有检索结果", "err");
+    return;
+  }
+  const best = items.find((i) => i.id === state.bestId) ||
+    items.slice().sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  openDownloadModal({
+    title: best.title || "",
+    quality: best.quality || "",
+    url: best.url || "",
+    source: best.source || "",
+    id: best.id || "",
+  });
 }
 
 async function startDownload() {
@@ -274,6 +352,7 @@ async function startDownload() {
     year,
     quality,
     source_id: (state.pendingDownload && state.pendingDownload.id) || "",
+    fetch_subtitle: $("#dl-subtitle").checked,
     organize: {
       title,
       year,
@@ -281,17 +360,33 @@ async function startDownload() {
       enabled,
       movie_dir_template: $("#cfg-dir-template").value || undefined,
       file_name_template: $("#cfg-file-template").value || undefined,
+      series_dir_template: $("#cfg-series-dir-template").value || undefined,
+      series_file_template: $("#cfg-series-file-template").value || undefined,
+      library_root: $("#cfg-library-root").value.trim(),
       mode: $("#cfg-org-mode").value || undefined,
     },
   };
   try {
-    const data = await api("/api/download", { method: "POST", body: JSON.stringify(body) });
+    await api("/api/download", { method: "POST", body: JSON.stringify(body) });
     showToast("任务已创建", "ok");
     $("#modal-download").hidden = true;
     await loadTasks();
   } catch (err) {
     showToast(err.message || "创建任务失败", "err");
   }
+}
+
+function taskSubtitleHtml(t) {
+  if (!t.subtitle_status) return "";
+  const label = subtitleText(t.subtitle_status);
+  if (!label) return "";
+  const cls = t.subtitle_status === "done" ? "ok" : (t.subtitle_status === "failed" ? "err" : "neutral");
+  const path = t.subtitle_path ? ` · ${escapeHtml(t.subtitle_path)}` : "";
+  const note = t.subtitle_note ? `<div class="path neutral">${escapeHtml(t.subtitle_note)}</div>` : "";
+  const retry = t.status === "complete" && t.subtitle_status !== "done"
+    ? `<button class="btn ghost btn-retry-sub" type="button" data-task="${escapeHtml(t.task_id)}">重试字幕</button>`
+    : "";
+  return `<div class="path ${cls}">${escapeHtml(label)}${path}</div>${note}${retry}`;
 }
 
 function renderTasks(tasks) {
@@ -302,11 +397,11 @@ function renderTasks(tasks) {
   }
   box.innerHTML = tasks.map((t) => {
     const path = t.organized_path || t.saved_path || "";
-    const pathHtml = t.status === "complete"
-      ? (path
-          ? `<div class="path">输出路径：${escapeHtml(path)}</div>`
-          : `<div class="path neutral">已完成，但未记录输出路径</div>`)
-      : (t.error ? `<div class="path err">${escapeHtml(t.error)}</div>` : "");
+    const pathHtml = path
+      ? `<div class="path">输出路径：${escapeHtml(path)}</div>`
+      : (t.status === "complete" ? `<div class="path neutral">已完成，但未记录输出路径</div>` : "");
+    const errHtml = t.error ? `<div class="path err">${escapeHtml(t.error)}</div>` : "";
+    const tags = (t.tags || []).map((x) => `<span class="tag feat">${escapeHtml(x)}</span>`).join("");
     return `
       <article class="task">
         <div class="task-head">
@@ -320,9 +415,13 @@ function renderTasks(tasks) {
           ${t.completed_length ? `<span>${escapeHtml(t.completed_length)}</span>` : ""}
           ${t.total_length ? `<span>/ ${escapeHtml(t.total_length)}</span>` : ""}
           ${t.quality ? `<span>${escapeHtml(t.quality)}</span>` : ""}
+          ${t.episode ? `<span>${escapeHtml(t.episode)}</span>` : ""}
           ${t.engine ? `<span>${escapeHtml(t.engine)}</span>` : ""}
         </div>
+        ${tags ? `<div class="tags">${tags}</div>` : ""}
         ${pathHtml}
+        ${errHtml}
+        ${taskSubtitleHtml(t)}
       </article>
     `;
   }).join("");
@@ -339,7 +438,7 @@ async function loadTasks() {
 
 async function saveConfig() {
   const providers = (state.config && state.config.search_providers
-    ? state.config.search_providers.map((p) => ({ ...p, headers: { ...(p.headers || {}) } }))
+    ? state.config.search_providers.map((p) => ({ ...p, headers: { ...(p.headers || {}) }, options: { ...(p.options || {}) } }))
     : []);
   $$("#cfg-providers input[data-provider-idx]").forEach((input) => {
     const idx = Number(input.getAttribute("data-provider-idx"));
@@ -357,6 +456,14 @@ async function saveConfig() {
     const idx = Number(input.getAttribute("data-provider-method"));
     if (providers[idx]) providers[idx].method = (input.value || "GET").toUpperCase();
   });
+  $$("#cfg-providers [data-qbt-opt]").forEach((input) => {
+    const idx = Number(input.getAttribute("data-qbt-opt"));
+    const key = input.getAttribute("data-opt-key");
+    if (providers[idx] && key) {
+      providers[idx].options = providers[idx].options || {};
+      providers[idx].options[key] = input.value.trim();
+    }
+  });
   const body = {
     llm: {
       base_url: $("#cfg-base-url").value.trim(),
@@ -367,9 +474,20 @@ async function saveConfig() {
     organize: {
       movie_dir_template: $("#cfg-dir-template").value.trim() || "{title} ({year})",
       file_name_template: $("#cfg-file-template").value.trim() || "{title} ({year}) - {quality}",
+      series_dir_template: $("#cfg-series-dir-template").value.trim() || "{title} ({year})/Season {season}",
+      series_file_template: $("#cfg-series-file-template").value.trim() || "{title} ({year}) - S{season}E{episode} - {quality}",
+      library_root: $("#cfg-library-root").value.trim(),
       mode: $("#cfg-org-mode").value || "move",
       enabled: $("#org-enabled").checked,
       unknown_year: (state.config && state.config.organize && state.config.organize.unknown_year) || "未知年份",
+    },
+    subtitle: {
+      enabled: $("#cfg-sub-enabled").checked,
+      prefer_bilingual: $("#cfg-sub-bilingual").checked,
+      extra_keywords: $("#cfg-sub-keywords").value
+        .split(/[,，、\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
     },
     search_providers: providers,
   };
@@ -412,6 +530,7 @@ async function testLLM() {
 
 function bindEvents() {
   $("#search-form").addEventListener("submit", doSearch);
+  $("#btn-best").addEventListener("click", pickBest);
   $("#btn-settings").addEventListener("click", () => { $("#modal-settings").hidden = false; });
   $$("[data-close-settings]").forEach((b) => b.addEventListener("click", () => { $("#modal-settings").hidden = true; }));
   $$("[data-close-download]").forEach((b) => b.addEventListener("click", () => { $("#modal-download").hidden = true; }));
@@ -422,8 +541,21 @@ function bindEvents() {
   $("#query").addEventListener("input", () => { clearTimeout(window._pt); window._pt = setTimeout(refreshOrganizePreview, 400); });
   $("#year").addEventListener("change", refreshOrganizePreview);
   $("#quality").addEventListener("change", refreshOrganizePreview);
-  $("#org-enabled").addEventListener("change", () => {
-    /* 仅影响后续下载弹窗默认值 */
+
+  $("#tasks").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".btn-retry-sub");
+    if (!btn) return;
+    const id = btn.getAttribute("data-task");
+    btn.disabled = true;
+    btn.textContent = "匹配中…";
+    try {
+      const data = await api(`/api/tasks/${encodeURIComponent(id)}/subtitle`, { method: "POST" });
+      showToast(data.ok ? "字幕已配好" : (data.message || "未匹配到字幕"), data.ok ? "ok" : "err");
+    } catch (err) {
+      showToast(err.message || "字幕匹配失败", "err");
+    } finally {
+      await loadTasks();
+    }
   });
 
   $("#results").addEventListener("click", (e) => {

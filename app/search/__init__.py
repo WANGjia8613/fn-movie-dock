@@ -18,6 +18,7 @@ def load_providers(cfg: AppConfig) -> list[SearchProvider]:
     from .custom_api import CustomApiProvider
     from .demo import DemoProvider
     from .llm_search import LLMSearchProvider
+    from .qbittorrent import QBittorrentProvider
     from ..llm import LLMClient
 
     providers: list[SearchProvider] = []
@@ -28,6 +29,8 @@ def load_providers(cfg: AppConfig) -> list[SearchProvider]:
             providers.append(DemoProvider(pc))
         elif pc.type == "llm":
             providers.append(LLMSearchProvider(LLMClient(cfg.llm), pc))
+        elif pc.type == "qbittorrent":
+            providers.append(QBittorrentProvider(pc))
         elif pc.type == "custom_api":
             providers.append(CustomApiProvider(pc))
     return providers
@@ -42,9 +45,20 @@ def provider_labels(cfg: AppConfig) -> list[str]:
     return labels
 
 
+def provider_type_labels() -> dict[str, str]:
+    """前端设置页用的类型中文名。"""
+    return {
+        "demo": "演示数据",
+        "llm": "大模型检索",
+        "qbittorrent": "qBittorrent 搜索",
+        "custom_api": "自定义索引",
+    }
+
+
 __all__ = [
     "SearchProvider",
     "load_providers",
     "provider_labels",
+    "provider_type_labels",
     "ProviderConfig",
 ]

@@ -9,27 +9,46 @@ if [ ! -f "$CONFIG_PATH" ]; then
   cp /app/config.example.yaml "$CONFIG_PATH"
 fi
 
-# 默认把容器内下载目录写进配置（若用户未改）
-# 环境变量优先，见 app/config.py
-
-mkdir -p /downloads /data /config
+mkdir -p /downloads /downloads/incoming /data /config
 
 echo "[片坞] 启动 aria2 RPC..."
-aria2c \
-  --enable-rpc \
-  --rpc-listen-all=true \
-  --rpc-listen-port=6800 \
-  --rpc-allow-origin-all=true \
-  --dir=/downloads/incoming \
-  --seed-time=0 \
-  --max-concurrent-downloads="${MAX_CONCURRENT:-3}" \
-  --continue=true \
-  --auto-file-renaming=true \
-  --allow-overwrite=false \
-  --file-allocation=none \
-  --console-log-level=warn \
-  ${ARIA2_RPC_SECRET:+--rpc-secret=$ARIA2_RPC_SECRET} \
-  >/var/log/aria2.log 2>&1 &
+ARIA2_ARGS="
+  --enable-rpc
+  --rpc-listen-all=true
+  --rpc-listen-port=6800
+  --rpc-allow-origin-all=true
+  --dir=/downloads/incoming
+  --seed-time=0
+  --seed-ratio=0.0
+  --max-concurrent-downloads=${MAX_CONCURRENT:-3}
+  --continue=true
+  --auto-file-renaming=true
+  --allow-overwrite=false
+  --file-allocation=none
+  --max-connection-per-server=16
+  --split=16
+  --disk-cache=64M
+  --enable-dht=true
+  --bt-enable-lpd=true
+  --bt-save-metadata=true
+  --bt-max-peers=64
+  --follow-torrent=true
+  --console-log-level=warn
+  --summary-interval=0
+"
+
+# 可选：全局 tracker 列表（逗号分隔），也能在配置文件里按任务下发
+if [ -n "${BT_TRACKERS:-}" ]; then
+  ARIA2_ARGS="$ARIA2_ARGS --bt-tracker=${BT_TRACKERS}"
+fi
+
+# 可选：RPC 密钥（同时记得在配置里填 downloader.aria2.rpc_secret）
+if [ -n "${ARIA2_RPC_SECRET:-}" ]; then
+  ARIA2_ARGS="$ARIA2_ARGS --rpc-secret=${ARIA2_RPC_SECRET}"
+fi
+
+# shellcheck disable=SC2086
+aria2c $ARIA2_ARGS >/var/log/aria2.log 2>&1 &
 
 echo "[片坞] 启动 Web 服务..."
 cd /app

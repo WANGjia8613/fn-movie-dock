@@ -185,3 +185,23 @@ body { line-height: 1.5; }
   .search-form .row { grid-template-columns: 1fr 1fr; }
   .search-form .row .btn { grid-column: 1 / -1; }
 }
+
+/* ---------- 新增：评分推荐 / 特性标签 / 字幕状态 ---------- */
+.btn.best { background: linear-gradient(145deg, #3ecf8e, #2fa877); border-color: #2fa877; color: #08110c; font-weight: 600; }
+.btn.best:hover { filter: brightness(1.06); }
+
+.tag.feat { background: rgba(61, 139, 253, 0.14); color: #8ab6ff; border-color: rgba(61, 139, 253, 0.3); }
+.tag.score { background: rgba(230, 184, 77, 0.14); color: var(--warn); border-color: rgba(230, 184, 77, 0.3); }
+
+.result.result-best { border-color: rgba(62, 207, 142, 0.5); box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.25) inset; }
+.best-flag {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px;
+  background: rgba(62, 207, 142, 0.16); color: var(--ok); border: 1px solid rgba(62, 207, 142, 0.35);
+  vertical-align: middle;
+}
+
+.path.ok { background: rgba(62, 207, 142, 0.08); border-color: rgba(62, 207, 142, 0.25); color: var(--ok); }
+.btn-retry-sub { margin-top: 8px; font-size: 12px; padding: 5px 10px; }
+
+.provider input[type="password"] { font-family: inherit; }
+.search-form .row .btn.best { white-space: nowrap; }
