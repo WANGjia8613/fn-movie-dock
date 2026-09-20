@@ -51,16 +51,20 @@ def _clean(html: str) -> str:
 
 
 class SubHDClient:
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, proxy: str = ""):
         self.timeout = timeout
+        self.proxy = (proxy or "").strip()
 
     # ---------- 内部 ----------
     def _client(self) -> httpx.Client:
-        return httpx.Client(
-            timeout=self.timeout,
-            follow_redirects=True,
-            headers={"User-Agent": UA, "Referer": BASE + "/"},
-        )
+        kwargs: dict[str, object] = {
+            "timeout": self.timeout,
+            "follow_redirects": True,
+            "headers": {"User-Agent": UA, "Referer": BASE + "/"},
+        }
+        if self.proxy:
+            kwargs["proxy"] = self.proxy
+        return httpx.Client(**kwargs)  # type: ignore[arg-type]
 
     # ---------- 搜索 ----------
     def search_movies(self, client: httpx.Client, keyword: str) -> list[SubHDMovie]:

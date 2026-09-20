@@ -136,9 +136,10 @@ def _score_sub_file(path: Path) -> float:
 
 
 class SubtitleService:
-    def __init__(self, cfg: SubtitleConfig, llm: "LLMClient | None" = None):
+    def __init__(self, cfg: SubtitleConfig, llm: "LLMClient | None" = None, proxy: str = ""):
         self.cfg = cfg
         self.llm = llm
+        self.proxy = (proxy or "").strip()
 
     # ---------- 对外 ----------
     async def fetch_for_video(
@@ -243,7 +244,7 @@ class SubtitleService:
         tokens = tokens_from_video(video)
         if quality:
             tokens.extend(t for t in _HINT_TOKENS if t in quality.lower())
-        client = SubHDClient(timeout=max(10, self.cfg.timeout_seconds))
+        client = SubHDClient(timeout=max(10, self.cfg.timeout_seconds), proxy=self.proxy)
         errors: list[str] = []
 
         for keyword in (keywords or self._keyword_candidates(video, title, year)):

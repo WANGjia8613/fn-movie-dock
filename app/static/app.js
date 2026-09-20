@@ -85,6 +85,7 @@ function showToast(msg, type = "info") {
 }
 
 const PROVIDER_LABELS = {
+  builtin: "内置索引",
   demo: "演示数据",
   llm: "大模型检索",
   qbittorrent: "qBittorrent 搜索",
@@ -112,6 +113,9 @@ async function loadConfig() {
   $("#cfg-sub-keywords").value = (sub.extra_keywords || []).join("、");
   $("#sub-enabled").checked = sub.enabled !== false;
 
+  const net = cfg.network || {};
+  $("#cfg-proxy").value = net.proxy || "";
+
   $("#download-root").textContent = `下载根目录：${cfg.download_root || "-"}`;
   $("#cfg-env").textContent =
     `下载根目录：${cfg.download_root || "-"} · 资料库：${org.library_root || "（同下载根目录）"} · aria2 RPC：${cfg.aria2_rpc_url || "-"}`;
@@ -124,7 +128,14 @@ async function loadConfig() {
     const typeLabel = PROVIDER_LABELS[p.type] || p.type;
     const opts = p.options || {};
     let extra = "";
-    if (p.type === "custom_api") {
+    if (p.type === "builtin") {
+      extra = `
+        <label class="field" style="margin-top:8px">
+          <span>启用的源（逗号分隔：tpb / yts / dmhy）</span>
+          <input type="text" data-provider-opt="${idx}" data-opt-key="sources" value="${escapeHtml(opts.sources || "tpb,yts,dmhy")}" placeholder="tpb,yts,dmhy" />
+        </label>
+      `;
+    } else if (p.type === "custom_api") {
       extra = `
         <label class="field" style="margin-top:8px">
           <span>名称</span>
@@ -546,6 +557,14 @@ async function saveConfig() {
       providers[idx].options[key] = input.value.trim();
     }
   });
+  $$("#cfg-providers [data-provider-opt]").forEach((input) => {
+    const idx = Number(input.getAttribute("data-provider-opt"));
+    const key = input.getAttribute("data-opt-key");
+    if (providers[idx] && key) {
+      providers[idx].options = providers[idx].options || {};
+      providers[idx].options[key] = input.value.trim();
+    }
+  });
   const body = {
     llm: {
       base_url: $("#cfg-base-url").value.trim(),
@@ -570,6 +589,10 @@ async function saveConfig() {
         .split(/[,，、\s]+/)
         .map((s) => s.trim())
         .filter(Boolean),
+    },
+    network: {
+      proxy: $("#cfg-proxy").value.trim(),
+      timeout_seconds: (state.config && state.config.network && state.config.network.timeout_seconds) || 20,
     },
     search_providers: providers,
   };

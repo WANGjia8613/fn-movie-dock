@@ -22,9 +22,10 @@ class CustomApiProvider(SearchProvider):
     - 字段兼容：title/name, url/magnet/link, quality, resolution, size, seeds, note
     """
 
-    def __init__(self, pc: ProviderConfig):
+    def __init__(self, pc: ProviderConfig, proxy: str = ""):
         self.pc = pc
         self.name = pc.name or "自定义索引"
+        self.proxy = (proxy or "").strip() or str((pc.options or {}).get("proxy") or "").strip()
 
     async def search(self, req: SearchRequest) -> tuple[list[SourceItem], list[str]]:
         url = (self.pc.url or "").strip()
@@ -40,7 +41,10 @@ class CustomApiProvider(SearchProvider):
         method = (self.pc.method or "GET").upper()
         headers = dict(self.pc.headers or {})
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            kwargs: dict[str, Any] = {"timeout": 30.0, "follow_redirects": True}
+            if self.proxy:
+                kwargs["proxy"] = self.proxy
+            async with httpx.AsyncClient(**kwargs) as client:  # type: ignore[arg-type]
                 if method == "POST":
                     resp = await client.post(url, headers=headers, json=params)
                 else:

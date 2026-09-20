@@ -200,7 +200,7 @@ class DownloadManager:
         self.tasks: dict[str, DownloadTask] = {}
         self.aria2 = Aria2Client(cfg.downloader.aria2.rpc_url, cfg.downloader.aria2.rpc_secret)
         self.organizer = Organizer(cfg.organize, cfg.download_root(), cfg.library_root())
-        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm))
+        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm), proxy=cfg.network.proxy)
         self._poller: asyncio.Task | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._state_path = cfg.state_dir() / "tasks.json"
@@ -255,7 +255,7 @@ class DownloadManager:
         """配置热更新：同步下载根目录、整理规则、aria2 RPC、字幕设置。"""
         self.cfg = cfg
         self.organizer = Organizer(cfg.organize, cfg.download_root(), cfg.library_root())
-        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm))
+        self.subtitle = SubtitleService(cfg.subtitle, llm=LLMClient(cfg.llm), proxy=cfg.network.proxy)
         self.aria2 = Aria2Client(cfg.downloader.aria2.rpc_url, cfg.downloader.aria2.rpc_secret)
         try:
             cfg.download_root().mkdir(parents=True, exist_ok=True)

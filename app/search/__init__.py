@@ -15,6 +15,7 @@ class SearchProvider(ABC):
 
 
 def load_providers(cfg: AppConfig) -> list[SearchProvider]:
+    from .builtin import BuiltinProvider
     from .custom_api import CustomApiProvider
     from .demo import DemoProvider
     from .llm_search import LLMSearchProvider
@@ -22,17 +23,21 @@ def load_providers(cfg: AppConfig) -> list[SearchProvider]:
     from ..llm import LLMClient
 
     providers: list[SearchProvider] = []
+    proxy = (cfg.network.proxy or "").strip()
+    timeout = int(cfg.network.timeout_seconds or 20)
     for pc in cfg.search.providers:
         if not pc.enabled:
             continue
-        if pc.type == "demo":
+        if pc.type == "builtin":
+            providers.append(BuiltinProvider(pc, global_proxy=proxy, global_timeout=timeout))
+        elif pc.type == "demo":
             providers.append(DemoProvider(pc))
         elif pc.type == "llm":
             providers.append(LLMSearchProvider(LLMClient(cfg.llm), pc))
         elif pc.type == "qbittorrent":
             providers.append(QBittorrentProvider(pc))
         elif pc.type == "custom_api":
-            providers.append(CustomApiProvider(pc))
+            providers.append(CustomApiProvider(pc, proxy=proxy))
     return providers
 
 
@@ -48,6 +53,7 @@ def provider_labels(cfg: AppConfig) -> list[str]:
 def provider_type_labels() -> dict[str, str]:
     """前端设置页用的类型中文名。"""
     return {
+        "builtin": "内置索引（推荐）",
         "demo": "演示数据",
         "llm": "大模型检索",
         "qbittorrent": "qBittorrent 搜索",

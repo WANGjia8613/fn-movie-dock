@@ -56,6 +56,7 @@ async def get_config(request: Request) -> ConfigOut:
         download_root=str(cfg.download_root()),
         organize=cfg.organize.model_dump(),
         subtitle=cfg.subtitle.model_dump(),
+        network=cfg.network.model_dump(),
         search_providers=[p.model_dump() for p in cfg.search.providers],
         search_sort_by_score=cfg.search.sort_by_score,
         aria2_rpc_url=cfg.downloader.aria2.rpc_url,
@@ -116,6 +117,16 @@ async def update_config(request: Request, body: ConfigUpdateIn) -> dict[str, Any
                 setattr(cfg.subtitle, key, str(data[key]))
         if isinstance(data.get("extra_keywords"), list):
             cfg.subtitle.extra_keywords = [str(k).strip() for k in data["extra_keywords"] if str(k).strip()]
+
+    if body.network is not None:
+        data = body.network
+        if "proxy" in data and data["proxy"] is not None:
+            cfg.network.proxy = str(data["proxy"]).strip()
+        if data.get("timeout_seconds"):
+            try:
+                cfg.network.timeout_seconds = max(5, int(data["timeout_seconds"]))
+            except (TypeError, ValueError):
+                pass
 
     if body.search_providers is not None:
         providers: list[ProviderConfig] = []
@@ -200,11 +211,11 @@ async def search(request: Request, body: SearchRequest) -> SearchResponse:
 
     sort_wanted = cfg.search.sort_by_score if body.sort_by_score is None else bool(body.sort_by_score)
     if sort_wanted:
-        uniq = sort_by_score(uniq, prefer_resolution=body.quality or "")
+        uniq = sort_by_score(uniq, prefer_resolution=body.quality or "", query=body.query, year=body.year)
     else:
-        annotate_scores(uniq, prefer_resolution=body.quality or "")
+        annotate_scores(uniq, prefer_resolution=body.quality or "", query=body.query, year=body.year)
 
-    best = best_source(uniq, prefer_resolution=body.quality or "") if uniq else None
+    best = best_source(uniq, prefer_resolution=body.quality or "", query=body.query, year=body.year) if uniq else None
     return SearchResponse(query=body.query, items=uniq, providers=labels, warnings=warnings,
                           best_id=best.id if best else "")
 

@@ -67,7 +67,16 @@ def _size_to_gb(size: str) -> float:
     return value * factor.get(unit, 1.0)
 
 
-def score_source(item: SourceItem, prefer_resolution: str = "") -> float:
+def _compact(text: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (text or "").lower())
+
+
+def _query_tokens(query: str) -> list[str]:
+    parts = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff]+", (query or "").lower())
+    return [p for p in parts if len(p) >= 2]
+
+
+def score_source(item: SourceItem, prefer_resolution: str = "", query: str = "", year: int | None = None) -> float:
     """给候选打分：清晰度为主，做种数次之，特性标签/体积做加分与合理性约束。"""
     resolution = (item.resolution or item.quality or "").lower()
     score = 0.0
@@ -108,22 +117,49 @@ def score_source(item: SourceItem, prefer_resolution: str = "") -> float:
     elif item.url_type == "torrent":
         score += 1.0
 
+    # 关键词相关度：索引站常返回“沾边”的结果（搜 wall-e 也会出华尔街之狼）
+    title_low = (item.title or "").lower()
+    tokens = _query_tokens(query)
+    if tokens:
+        hits = sum(1 for t in tokens if t in title_low)
+        ratio = hits / len(tokens)
+        if ratio >= 1.0:
+            score += 18.0
+        elif ratio > 0:
+            score += 12.0 * ratio
+        else:
+            score -= 12.0
+    # 整串（去掉分隔符）命中：wall-e → walle，能把 WALL-E 与 Wall Street 区分开
+    compact_query = _compact(query)
+    if len(compact_query) >= 4 and compact_query in _compact(item.title):
+        score += 25.0
+    if year and str(year) in (item.title or ""):
+        score += 3.0
+
     return round(score, 2)
 
 
-def annotate_scores(items: list[SourceItem], prefer_resolution: str = "") -> list[SourceItem]:
+def annotate_scores(
+    items: list[SourceItem], prefer_resolution: str = "", query: str = "", year: int | None = None
+) -> list[SourceItem]:
     for it in items:
         if not it.tags:
             it.tags = detect_tags(f"{it.title} {it.note}")
-        it.score = score_source(it, prefer_resolution=prefer_resolution)
+        it.score = score_source(it, prefer_resolution=prefer_resolution, query=query, year=year)
     return items
 
 
-def sort_by_score(items: list[SourceItem], prefer_resolution: str = "") -> list[SourceItem]:
-    annotate_scores(items, prefer_resolution=prefer_resolution)
+def sort_by_score(
+    items: list[SourceItem], prefer_resolution: str = "", query: str = "", year: int | None = None
+) -> list[SourceItem]:
+    annotate_scores(items, prefer_resolution=prefer_resolution, query=query, year=year)
     return sorted(items, key=lambda i: i.score, reverse=True)
 
 
-def best_source(items: list[SourceItem], prefer_resolution: str = "") -> SourceItem | None:
-    ranked = sort_by_score([i for i in items if i.url], prefer_resolution=prefer_resolution)
+def best_source(
+    items: list[SourceItem], prefer_resolution: str = "", query: str = "", year: int | None = None
+) -> SourceItem | None:
+    ranked = sort_by_score(
+        [i for i in items if i.url], prefer_resolution=prefer_resolution, query=query, year=year
+    )
     return ranked[0] if ranked else None

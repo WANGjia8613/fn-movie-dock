@@ -297,6 +297,90 @@ check("magnet_dn_title", title == "WALL-E" and year == 2008, f"{title}/{year}")
 title2, year2 = _title_from_url("https://example.com/Some.Movie.2019.1080p.mkv")
 check("url_fallback_title", bool(title2), f"{title2}/{year2}")
 
+# ---------- 11) 内置直连索引源（不依赖 qBittorrent） ----------
+import asyncio as _aio  # noqa: E402
+import json  # noqa: E402
+
+from app.search.builtin import BuiltinProvider, DMHYSource, TPBSource, YTSSource  # noqa: E402
+from app.search.common import build_magnet, human_size, int_or_none  # noqa: E402
+
+check("common_human_size", human_size(1293736264).startswith("1.21 GB") or "GB" in human_size(1293736264),
+      human_size(1293736264))
+check("common_int_or_none", int_or_none("52") == 52 and int_or_none("x") is None, "ok")
+mag = build_magnet("6687A51BB38802620E13542D9C50235039F939D1", "WALL-E 2008")
+check("common_magnet", mag.startswith("magnet:?xt=urn:btih:6687") and "&dn=WALL-E%202008" in mag and "&tr=" in mag, mag[:60])
+
+# TPB / apibay JSON
+tpb_payload = json.dumps([
+    {"id": "1", "name": "WALL-E (2008) [1080p]",
+     "info_hash": "6687A51BB38802620E13542D9C50235039F939D1", "leechers": "8", "seeders": "52",
+     "num_files": "3", "size": "1293736264", "category": "207"},
+    {"id": "0", "name": "No results returned", "info_hash": "0000000000000000000000000000000000000000",
+     "seeders": "0", "leechers": "0", "size": "0"},
+])
+tpb_items = TPBSource().parse(tpb_payload, "https://apibay.org")
+check("tpb_parse", len(tpb_items) == 1 and tpb_items[0].quality == "1080p" and tpb_items[0].seeds == 52,
+      f"{len(tpb_items)} 条 / {tpb_items[0].seeds if tpb_items else '-'}")
+check("tpb_magnet", tpb_items and tpb_items[0].url.startswith("magnet:?xt=urn:btih:6687"), "ok")
+
+# YTS JSON
+yts_payload = json.dumps({"status": "ok", "data": {"movies": [{
+    "title": "Wall-E", "title_long": "Wall-E (2008)", "year": 2008,
+    "torrents": [{"hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "quality": "1080p", "type": "bluray",
+                 "size_bytes": 1293736264, "seeds": 100, "peers": 10, "video_codec": "x264"}],
+}]}})
+yts_items = YTSSource().parse(yts_payload, "https://yts.mx")
+check("yts_parse", len(yts_items) == 1 and yts_items[0].seeds == 100 and "Wall-E (2008)" in yts_items[0].title,
+      yts_items[0].title if yts_items else "empty")
+
+# DMHY RSS
+dmhy_payload = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><item>
+  <title>[DMG][WALL-E][1080p][BDRip]</title>
+  <enclosure url="magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" length="1" type="application/x-bittorrent" />
+  <description>大小：1.2GB</description>
+  <pubDate>Sat, 20 Sep 2026 10:00:00 +0800</pubDate>
+</item></channel></rss>"""
+dmhy_items = DMHYSource().parse(dmhy_payload, "https://share.dmhy.org")
+check("dmhy_parse", len(dmhy_items) == 1 and dmhy_items[0].url.startswith("magnet:") and dmhy_items[0].quality == "1080p",
+      f"{len(dmhy_items)} 条")
+check("dmhy_size", dmhy_items and dmhy_items[0].size == "1.2 GB", dmhy_items[0].size if dmhy_items else "-")
+
+# Provider：源选择 / 代理优先级 / 去重
+from app.config import ProviderConfig  # noqa: E402
+
+pc = ProviderConfig(type="builtin", enabled=True, name="内置索引",
+                    options={"sources": "tpb,notexist", "proxy": "http://127.0.0.1:7891"})
+prov = BuiltinProvider(pc, global_proxy="http://127.0.0.1:7890", global_timeout=20)
+check("builtin_source_filter", [s.key for s in prov.sources] == ["tpb"], [s.key for s in prov.sources])
+check("builtin_proxy_precedence", prov.proxy == "http://127.0.0.1:7891", prov.proxy)
+prov2 = BuiltinProvider(ProviderConfig(type="builtin", enabled=True, options={}), global_proxy="http://127.0.0.1:7890")
+check("builtin_global_proxy", prov2.proxy == "http://127.0.0.1:7890", prov2.proxy)
+check("builtin_default_sources", [s.key for s in prov2.sources] == ["tpb", "yts", "dmhy"], [s.key for s in prov2.sources])
+
+
+class _FakeSource:
+    key = "fake"
+    label = "假源"
+    endpoints = ["http://x"]
+    limit = 10
+
+    async def search(self, client, query, source_name):  # noqa: ANN001
+        from app.models import SourceItem as _SI
+
+        return [
+            _SI(id="a", title=f"{query} A", quality="1080p", url="magnet:?xt=urn:btih:same", url_type="magnet"),
+            _SI(id="b", title=f"{query} B", quality="2160p", url="magnet:?xt=urn:btih:dup", url_type="magnet"),
+        ], ""
+
+
+from app.models import SearchRequest  # noqa: E402
+
+prov3 = BuiltinProvider(ProviderConfig(type="builtin", enabled=True, options={}))
+prov3.sources = [_FakeSource()]
+res_items, res_warn = _aio.run(prov3.search(SearchRequest(query="wall-e")))
+check("builtin_merge_dedupe", len(res_items) == 2, f"{len(res_items)} 条")
+
 # ---------- 输出 ----------
 print("=" * 68)
 failed = 0

@@ -18,29 +18,44 @@ paths:
   # 任务状态落盘目录（容器重启后任务列表不丢）
   state_dir: "/data"
 
+network:
+  # 出网代理：内置索引源 / 字幕站 等外部请求共用；留空=直连
+  # 境内直连不稳的源（YTS、DMHY、nyaa 等），填本地代理即可解锁
+  # 例（Clash 混合端口）：proxy: "http://127.0.0.1:7890"
+  proxy: ""
+  timeout_seconds: 20
+
 search:
-  # 是否按评分排序候选（清晰度 + 做种数 + HDR/DoVi 等特性）
+  # 是否按评分排序候选（清晰度 + 做种 + 特性 + 关键词相关度）
   sort_by_score: true
   providers:
+    # 【推荐】内置直连索引源：不依赖 qBittorrent，Windows 本地模式默认用它
+    # 实测：tpb 境内直连可用；yts/dmhy 建议配 network.proxy
+    - type: builtin
+      enabled: true
+      name: "内置索引"
+      options:
+        sources: "tpb,yts,dmhy"   # tpb=海盗湾 / yts / dmhy=动漫花园
+        limit: "60"
+        # proxy: "http://127.0.0.1:7890"   # 仅该源用代理
+    # 若本机装了 qBittorrent（含搜索插件），可启用它复用插件生态
+    - type: qbittorrent
+      enabled: false
+      name: "qBittorrent 搜索"
+      url: "http://127.0.0.1:8085"
+      options:
+        username: "admin"
+        password: ""
+        plugins: "piratebay"
+        category: "all"
+        limit: "100"
+        search_timeout: "45"
     - type: demo
       enabled: false
       name: "演示数据"
     - type: llm
       enabled: false
       name: "大模型检索"
-    # 推荐：复用本机 qBittorrent 的搜索插件（yts/bt4g/kickass…），结果真实可用
-    - type: qbittorrent
-      enabled: true
-      name: "qBittorrent 搜索"
-      url: "http://127.0.0.1:8085"
-      options:
-        username: "admin"
-        password: ""
-        # 留空=全部插件（可能被某个慢插件拖住）；建议固定几个快的
-        plugins: "yts,yts_am,bt4g,limetorrents,kickass_torrent,torrentfunk"
-        category: "all"
-        limit: "100"
-        search_timeout: "45"
     - type: custom_api
       enabled: false
       name: "自定义索引"

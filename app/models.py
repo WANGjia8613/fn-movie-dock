@@ -106,6 +106,7 @@ class ConfigOut(BaseModel):
     download_root: str
     organize: dict[str, Any]
     subtitle: dict[str, Any]
+    network: dict[str, Any] = Field(default_factory=dict)
     search_providers: list[dict[str, Any]]
     search_sort_by_score: bool = True
     aria2_rpc_url: str
@@ -115,6 +116,7 @@ class ConfigUpdateIn(BaseModel):
     llm: LLMConfigIn | None = None
     organize: dict[str, Any] | None = None
     subtitle: dict[str, Any] | None = None
+    network: dict[str, Any] | None = None
     search_providers: list[dict[str, Any]] | None = None
     search_sort_by_score: bool | None = None
 

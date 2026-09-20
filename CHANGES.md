@@ -143,3 +143,22 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
   - `Spider-Man.No.Way.Home.2021.2160p.WEB-DL...` → `Spider-Man No Way Home`
   - 顺手支持点号分词、体积标记（`1.20GB`）、磁力 dn= 推断
 - desktop_checks 增至 41 项（含前端入口可见性检查）；unit_checks 增至 39 项
+
+---
+
+## 0.3.0
+
+**内置直连索引源**：Windows 本地模式不再依赖 qBittorrent，点「搜索」就能用。
+
+- `app/search/builtin.py`
+  - **TPB / apibay**（海盗湾 JSON API）：境内直连实测可用（200，1.3s），电影/剧集，带做种数
+  - **YTS**（JSON API，镜像 yts.mx/rs/lt/am）：小体积、做种多；需代理
+  - **DMHY 动漫花园**（RSS，镜像 share.dmhy.org/dmhy.org）：中文标题动画/剧集；需代理
+  - 每个源按镜像顺序尝试，任一成功即用；结果按 url 去重；`sources` 可配
+- **全局代理开关** `network.proxy`：内置索引源 / 字幕站 / 自定义索引共用（Clash 混合端口即可），
+  设置页新增「网络（代理）」输入框；aria2 的下载代理用 `downloader.extra_options: {"all-proxy": ...}`
+- **候选评分加入关键词相关度**：修复"搜 wall-e 结果《华尔街之狼》排第一"
+  - 词元命中 + 整串（去分隔符）命中加权重：`wall-e`→`walle` 能区分 WALL-E 与 Wall Street
+  - 实测 `wall-e`：Criterion 4K REMUX 110 分 > AViATOR 4K 92 > YIFY 1080p(521做种) 86.5 > 华尔街之狼 90.7 降到其后
+- 默认检索源改为 `builtin`（qBittorrent 保留但默认关闭，NAS 上可自行开启）
+- 版本 0.2.2 → 0.3.0

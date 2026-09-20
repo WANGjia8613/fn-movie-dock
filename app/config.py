@@ -30,6 +30,18 @@ class PathsConfig(BaseModel):
     state_dir: str = "/data"
 
 
+class NetworkConfig(BaseModel):
+    """出网设置：内置索引源 / 字幕站 等外部请求共用。
+
+    境内直连不稳时（YTS、DMHY、nyaa 等），填上本地代理即可解锁：
+      proxy: "http://127.0.0.1:7890"（Clash 混合端口）
+    注意：aria2 的下载代理请在 downloader.extra_options 里设 all-proxy。
+    """
+
+    proxy: str = ""
+    timeout_seconds: int = 20
+
+
 class ProviderConfig(BaseModel):
     type: str
     enabled: bool = False
@@ -115,6 +127,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     organize: OrganizeConfig = Field(default_factory=OrganizeConfig)
     downloader: DownloaderConfig = Field(default_factory=DownloaderConfig)
@@ -185,10 +198,15 @@ _DEFAULT_DATA: dict[str, Any] = {
         "timeout_seconds": 60,
     },
     "paths": {"download_root": "/downloads", "state_dir": "/data"},
+    "network": {"proxy": "", "timeout_seconds": 20},
     "search": {
         "providers": [
-            {"type": "demo", "enabled": True, "name": "演示数据"},
-            {"type": "llm", "enabled": True, "name": "大模型检索"},
+            {
+                "type": "builtin",
+                "enabled": True,
+                "name": "内置索引",
+                "options": {"sources": "tpb,yts,dmhy", "limit": "60"},
+            },
             {
                 "type": "qbittorrent",
                 "enabled": False,
@@ -201,6 +219,8 @@ _DEFAULT_DATA: dict[str, Any] = {
                     "limit": "100",
                 },
             },
+            {"type": "demo", "enabled": False, "name": "演示数据"},
+            {"type": "llm", "enabled": False, "name": "大模型检索"},
             {
                 "type": "custom_api",
                 "enabled": False,
@@ -344,6 +364,7 @@ def save_app_config(cfg: AppConfig) -> Path:
     existing = _read_yaml_dict(cfg_path)
     existing["llm"] = cfg.llm.model_dump()
     existing["paths"] = cfg.paths.model_dump()
+    existing["network"] = cfg.network.model_dump()
     existing["organize"] = cfg.organize.model_dump()
     existing["search"] = cfg.search.model_dump()
     existing["downloader"] = cfg.downloader.model_dump()
