@@ -1,0 +1,50 @@
+# 片坞 Movie Dock 配置示例
+# 部署时复制为 /config/config.yaml 并按需修改
+
+server:
+  host: 0.0.0.0
+  port: 8090
+
+llm:
+  # OpenAI 兼容接口，也可填 DeepSeek / 中转 / 本地 vLLM 等
+  base_url: "https://api.openai.com/v1"
+  api_key: ""
+  model: "gpt-4o-mini"
+  timeout_seconds: 60
+
+paths:
+  # 容器内下载根目录，对应 compose 里挂载的飞牛共享目录
+  download_root: "/downloads"
+
+search:
+  providers:
+    - type: demo
+      enabled: true
+      name: "演示数据"
+    - type: llm
+      enabled: true
+      name: "大模型检索"
+    - type: custom_api
+      enabled: false
+      name: "自定义索引"
+      # 期望返回 JSON 数组，字段见 README
+      url: ""
+      method: "GET"
+      headers: {}
+
+organize:
+  enabled: true
+  # {title} {year} {quality} {resolution} {ext}
+  movie_dir_template: "{title} ({year})"
+  file_name_template: "{title} ({year}) - {quality}"
+  mode: "move"  # move | copy | hardlink
+  unknown_year: "未知年份"
+
+downloader:
+  engine: "aria2"
+  aria2:
+    rpc_url: "http://127.0.0.1:6800/jsonrpc"
+    rpc_secret: ""
+  max_concurrent: 3
+  # 解析结果里磁力/直链的默认保存子目录
+  category_dir: "incoming"

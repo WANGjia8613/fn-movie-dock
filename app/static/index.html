@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>片坞 Movie Dock</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">坞</div>
+        <div>
+          <h1>片坞</h1>
+          <p>飞牛 NAS 一体化片源检索与下载</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="aria2-badge" class="badge">下载引擎检测中…</span>
+        <button id="btn-settings" class="btn ghost" type="button">设置</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel search-panel">
+        <h2>检索片源</h2>
+        <form id="search-form" class="search-form">
+          <div class="row">
+            <label class="field grow">
+              <span>电影 / 剧集名称</span>
+              <input id="query" type="text" placeholder="例如：沙丘2、奥本海默" required autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>年份（可选）</span>
+              <input id="year" type="number" min="1900" max="2100" placeholder="2024" />
+            </label>
+            <label class="field">
+              <span>清晰度偏好</span>
+              <select id="quality">
+                <option value="">不限</option>
+                <option value="2160p">2160p / 4K</option>
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+              </select>
+            </label>
+            <button id="btn-search" class="btn primary" type="submit">搜索</button>
+          </div>
+          <div class="organize-row">
+            <label class="check">
+              <input id="org-enabled" type="checkbox" checked />
+              下载完成后自动整理到电影文件夹
+            </label>
+            <label class="field inline">
+              <span>整理预览</span>
+              <input id="org-preview" type="text" readonly placeholder="输入片名后显示目标路径" />
+            </label>
+          </div>
+        </form>
+        <div id="search-warnings" class="warnings" hidden></div>
+        <div id="search-meta" class="meta" hidden></div>
+        <div id="results" class="results"></div>
+      </section>
+
+      <section class="panel tasks-panel">
+        <div class="panel-head">
+          <h2>下载任务</h2>
+          <button id="btn-refresh-tasks" class="btn ghost" type="button">刷新</button>
+        </div>
+        <div id="tasks" class="tasks">
+          <div class="empty">暂无任务。检索后选择一条片源开始下载。</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>片坞 Movie Dock · 个人 NAS 使用</span>
+      <span id="download-root"></span>
+    </footer>
+  </div>
+
+  <div id="modal-settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>设置</h3>
+        <button class="btn ghost" type="button" data-close-settings>关闭</button>
+      </div>
+      <div class="modal-body">
+        <h4>大模型（OpenAI 兼容）</h4>
+        <p class="hint">请求只会发往你填写的 Base URL，API Key 保存在 NAS 配置文件中。</p>
+        <label class="field">
+          <span>Base URL</span>
+          <input id="cfg-base-url" type="text" placeholder="https://api.openai.com/v1" />
+        </label>
+        <label class="field">
+          <span>API Key</span>
+          <input id="cfg-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>模型名</span>
+          <input id="cfg-model" type="text" placeholder="gpt-4o-mini / deepseek-chat" />
+        </label>
+        <div class="btn-row">
+          <button id="btn-test-llm" class="btn" type="button">测试连接</button>
+          <button id="btn-save-config" class="btn primary" type="button">保存设置</button>
+        </div>
+        <div id="llm-test-result" class="hint"></div>
+
+        <h4>整理规则</h4>
+        <label class="field">
+          <span>电影文件夹模板</span>
+          <input id="cfg-dir-template" type="text" placeholder="{title} ({year})" />
+        </label>
+        <label class="field">
+          <span>文件名模板</span>
+          <input id="cfg-file-template" type="text" placeholder="{title} ({year}) - {quality}" />
+        </label>
+        <label class="field">
+          <span>整理方式</span>
+          <select id="cfg-org-mode">
+            <option value="move">移动（推荐）</option>
+            <option value="copy">复制</option>
+            <option value="hardlink">硬链接（省空间）</option>
+          </select>
+        </label>
+
+        <h4>检索源</h4>
+        <div id="cfg-providers" class="providers"></div>
+        <p class="hint">自定义索引需填写接口 URL。响应为 JSON 数组或 {items:[...]}，字段兼容 title/url/quality/seeds 等。</p>
+
+        <h4>环境</h4>
+        <div id="cfg-env" class="hint"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-download" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>开始下载</h3>
+        <button class="btn ghost" type="button" data-close-download>取消</button>
+      </div>
+      <div class="modal-body">
+        <div id="dl-summary" class="dl-summary"></div>
+        <label class="field">
+          <span>用于整理的片名</span>
+          <input id="dl-title" type="text" />
+        </label>
+        <label class="field">
+          <span>年份</span>
+          <input id="dl-year" type="number" min="1900" max="2100" />
+        </label>
+        <label class="field">
+          <span>清晰度标签</span>
+          <input id="dl-quality" type="text" placeholder="1080p" />
+        </label>
+        <label class="field">
+          <span>下载链接（磁力 / 种子 / 直链）</span>
+          <textarea id="dl-url" rows="3" readonly></textarea>
+        </label>
+        <label class="check">
+          <input id="dl-organize" type="checkbox" checked />
+          下载完成后自动整理
+        </label>
+        <div class="btn-row">
+          <button id="btn-start-download" class="btn primary" type="button">开始下载</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# 虚拟环境 / 依赖
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行时数据（含 API Key 与下载内容，勿提交）
+config.yaml
+config.local.yaml
+downloads/
+data/
+*.log
+/var/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+.env
+.env.*
