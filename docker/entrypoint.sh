@@ -10,6 +10,8 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 mkdir -p /downloads /downloads/incoming /data /config
+# 日志写进挂载卷（用 user: 1002 跑容器时 /var/log 不可写）
+ARIA2_LOG="${ARIA2_LOG:-/data/aria2.log}"
 
 echo "[片坞] 启动 aria2 RPC..."
 ARIA2_ARGS="
@@ -48,7 +50,7 @@ if [ -n "${ARIA2_RPC_SECRET:-}" ]; then
 fi
 
 # shellcheck disable=SC2086
-aria2c $ARIA2_ARGS >/var/log/aria2.log 2>&1 &
+aria2c $ARIA2_ARGS >"$ARIA2_LOG" 2>&1 &
 
 echo "[片坞] 启动 Web 服务..."
 cd /app
