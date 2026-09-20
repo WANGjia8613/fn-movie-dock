@@ -1,0 +1,41 @@
+# 片坞 Movie Dock —— 飞牛 fnOS / Docker 版（用官方镜像，无需本地构建）
+#
+# 用法：
+#   1) 改下面 volumes 的宿主路径（按你的存储空间改）
+#   2) docker compose -f docker-compose.release.yml up -d
+#   3) 浏览器打开 http://NAS-IP:8090
+#
+# 镜像来源：https://github.com/WANGjia8613/fn-movie-dock/pkgs/container/fn-movie-dock
+
+services:
+  movie-dock:
+    image: ghcr.io/wangjia8613/fn-movie-dock:latest   # 想固定版本就写 :0.4.2
+    container_name: movie-dock
+    restart: unless-stopped
+    # 用哪个 uid 跑容器：要能写你的电影库目录。飞牛上常见可用 1002（应用账号 claw）
+    # 不确定就用 0（root），但 /vol2/1000/movie 受 trimacl 限制时 root 也可能写不进
+    user: "1002:1002"
+    ports:
+      - "8090:8090"          # 端口被占用就改左边，如 18090:8090
+    environment:
+      DOWNLOAD_ROOT: /downloads
+      STATE_DIR: /data
+      ARIA2_RPC_URL: http://127.0.0.1:6800/jsonrpc
+      SERVER_PORT: "8090"
+      # 可选：全局 BT tracker（逗号分隔）
+      # BT_TRACKERS: "udp://tracker.opentrackr.org:1337/announce,udp://open.tracker.cl:1337/announce"
+      # 可选：给容器配代理（内置索引源 YTS/DMHY、字幕站会用到）
+      # HTTPS_PROXY: "http://192.168.0.32:7897"
+      # HTTP_PROXY: "http://192.168.0.32:7897"
+    volumes:
+      # === 请按你的飞牛共享目录修改 ===
+      - /vol1/@appcenter/movie-dock/config:/config      # 配置（含 API Key，勿外泄）
+      - /vol2/1000/movie-md-incoming:/downloads         # 下载临时目录（建议放空间大的存储空间）
+      - /vol1/@appcenter/movie-dock/data:/data          # 任务状态（重启不丢）
+      - /vol2/1000/movie:/library                       # 电影库（可选，配合 library_root: /library）
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

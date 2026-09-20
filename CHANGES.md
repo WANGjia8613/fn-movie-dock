@@ -238,3 +238,14 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
   `LICENSE`、`THIRD-PARTY-NOTICES.md`、`README.md`、`CHANGES.md`、`7-Zip-License.txt`、`aria2-COPYING.txt`
 - README 顶部与「许可证与声明」同步更新（不再写"仅供个人自用、请勿分发"）
 - 版本 0.4.1 → 0.4.2
+
+---
+
+## 0.4.2（飞牛 / Docker 版发布流水线）
+
+- 新增 `.github/workflows/docker-release.yml`：打 tag（形如 `v0.4.2`，不带 `-win`）时
+  - 先跑逻辑层单测 → 构建镜像 → 推送到 GHCR（`ghcr.io/wangjia8613/fn-movie-dock:<tag>` 与 `:latest`）
+  - **容器冒烟测试**：真起容器 → 健康检查 / 下载引擎状态 / 整理预览 → 打印容器日志
+  - 导出离线镜像包 `fn-movie-dock-<tag>-docker-image.tar.gz` 并发布到 Release（附 SHA256）
+- 新增 `docker-compose.release.yml`：直接用官方镜像的 compose（含权限说明与 healthcheck）
+- `windows-build.yml` 触发器收紧为 `v*-win`，避免和飞牛版 tag 撞车

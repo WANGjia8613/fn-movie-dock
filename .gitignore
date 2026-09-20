@@ -38,3 +38,6 @@ packaging/selfsigned/*.key
 packaging/selfsigned/*.pem
 packaging/selfsigned/*password*
 *.pfx
+
+# docker 冒烟测试挂载目录
+smoke-config/

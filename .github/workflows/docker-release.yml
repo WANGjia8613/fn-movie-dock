@@ -1,0 +1,158 @@
+name: docker-release
+
+# 飞牛 NAS / Docker 版发布：打 tag（形如 v0.4.2，不带 -win）时触发
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+      - "!*-win"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算镜像名与标签
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME:-manual}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "镜像：$IMAGE:$TAG"
+
+      - name: 单测（构建前先跑一遍逻辑层）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python scripts/review_checks.py
+          python scripts/unit_checks.py
+          python scripts/desktop_checks.py
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 容器冒烟测试（起容器 → 健康检查 → 自检）
+        run: |
+          docker run -d --name md-smoke -p 8090:8090 \
+            -e MOVIE_DOCK_CONFIG=/config/config.yaml \
+            -v "$PWD/smoke-config:/config" \
+            "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health > /tmp/health.json 2>/dev/null; then break; fi
+            sleep 2
+          done
+          cat /tmp/health.json
+          echo
+          curl -fsS http://127.0.0.1:8090/api/downloader/status
+          echo
+          curl -fsS -X POST http://127.0.0.1:8090/api/organize/preview \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"沙丘2","year":2024,"quality":"1080p"}'
+          echo
+          echo "--- 容器日志（末尾）---"
+          docker logs md-smoke 2>&1 | tail -15
+          docker rm -f md-smoke
+
+      - name: 导出离线镜像包（docker save）
+        run: |
+          docker pull "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+          docker save "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" \
+            | gzip -9 > "fn-movie-dock-${{ steps.meta.outputs.tag }}-docker-image.tar.gz"
+          ls -lh fn-movie-dock-*.tar.gz
+          sha256sum fn-movie-dock-*.tar.gz > SHA256SUMS-docker.txt
+          cat SHA256SUMS-docker.txt
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fn-movie-dock-docker-${{ steps.meta.outputs.tag }}
+          path: |
+            fn-movie-dock-*-docker-image.tar.gz
+            SHA256SUMS-docker.txt
+          retention-days: 30
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 片坞 Movie Dock ${{ github.ref_name }}（飞牛 NAS / Docker 版）
+          body: |
+            片坞 Movie Dock —— **飞牛 fnOS / Docker 服务端版**（检索 / 下载 / 自动整理 / 自动中文字幕）。
+            Windows 本地客户端版见同版本号的 `v${{ github.ref_name }}-win` Release。
+
+            ## 方式一：直接拉镜像（推荐）
+
+            ```bash
+            docker pull ghcr.io/wangjia8613/fn-movie-dock:${{ github.ref_name }}
+            ```
+
+            或下载本页的 `docker-compose.release.yml`，改好路径后：
+
+            ```bash
+            docker compose -f docker-compose.release.yml up -d
+            ```
+
+            默认访问：`http://NAS-IP:8090`
+
+            ## 方式二：离线镜像包（拉不动 ghcr 时用）
+
+            下载 `fn-movie-dock-${{ github.ref_name }}-docker-image.tar.gz` 传到 NAS，然后：
+
+            ```bash
+            gunzip -c fn-movie-dock-${{ github.ref_name }}-docker-image.tar.gz | docker load
+            docker compose -f docker-compose.release.yml up -d
+            ```
+
+            ## 目录与权限（重要）
+
+            | 宿主路径 | 容器路径 | 用途 |
+            |---|---|---|
+            | `/vol1/@appcenter/movie-dock/config` | `/config` | 配置（含 API Key、qB 密码），需容器用户可写 |
+            | `/vol2/1000/movie-md-incoming` | `/downloads` | 下载临时目录 |
+            | `/vol1/@appcenter/movie-dock/data` | `/data` | 任务状态（重启不丢） |
+            | `/vol2/1000/movie` | `/library` | 电影库（可选，配合 `organize.library_root: /library`） |
+
+            - 容器默认以 `user: "1002:1002"` 运行（compose 里可改）：飞牛的 `/vol2/1000/movie`
+              受 trimacl 限制，只有特定 uid 能写，用应用账号 uid 跑容器最省事
+            - 首次启动会生成 `/config/config.yaml`；改完设置页保存即热更新
+            - 镜像内已带 aria2（`seed-time=0` 不做种，防 PCDN）与 7-Zip（解 rar/7z 字幕包）
+
+            ## 许可证
+
+            本项目为 **MIT**；镜像内含第三方组件（aria2=GPL-2.0+、7-Zip=LGPL+unRAR 限制），
+            详见仓库 `LICENSE` 与 `THIRD-PARTY-NOTICES.md`。
+
+            ## 免责声明
+
+            本工具不提供、不托管任何影视资源。请遵守当地法律法规与内容版权，仅下载你有权获取与存储的内容。
+          files: |
+            docker-compose.release.yml
+            fn-movie-dock-${{ steps.meta.outputs.tag }}-docker-image.tar.gz
+            SHA256SUMS-docker.txt
+          draft: false
+          prerelease: false
