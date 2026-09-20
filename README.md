@@ -8,9 +8,12 @@
 
 ---
 
-> **本仓库为改进版（0.1.2）**：在原版基础上补上了「真实可用的检索源 + 自动中文字幕 +
-> 剧集整理 + 候选评分/一键最优 + 任务持久化」等能力，改动清单见 [CHANGES.md](CHANGES.md)。
-> 原项目：<https://github.com/WANGjia8613/fn-movie-dock>（无 LICENSE，本改进版仅供个人自用，请勿公开分发）。
+> **本仓库为改进版（0.4.x）**：在原版基础上补上了「内置直连索引源 + 自动中文字幕 + 剧集整理 +
+> 候选评分/一键最优 + 任务持久化 + Windows 本地版（WebView2 客户端）」等能力，
+> 改动清单见 [CHANGES.md](CHANGES.md)。上游仓库：<https://github.com/WANGjia8613/fn-movie-dock>。
+>
+> **许可证：MIT**（见 [LICENSE](LICENSE)）—— 可自由使用、修改、再分发（保留版权声明即可）。
+> 随包附带的第三方二进制（aria2c / 7-Zip）另有其许可证，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 目录
 
@@ -413,9 +416,12 @@ fn-movie-dock/
 
 ## 许可证与声明
 
-- 代码仅供个人学习与自用
+- 本项目代码以 **MIT** 许可证发布，见 [LICENSE](LICENSE)；可自由使用、修改、再分发（保留版权与许可声明）
+- 发布包中随附的第三方二进制（`aria2c.exe` GPL-2.0+、`7z.exe/7z.dll` LGPL + unRAR 限制）
+  各自适用其原许可证，详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 - 公开仓库中的示例配置**不含**任何真实 API Key
-- 请遵守当地法律法规与内容版权；未授权内容下载责任由使用者自行承担
+- 本项目**不提供、不托管任何影视资源**；请遵守当地法律法规与内容版权，
+  仅下载你有权获取与存储的内容，使用后果由使用者自行承担
 - 通常无法上架飞牛官方应用中心
 
 ---

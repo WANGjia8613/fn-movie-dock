@@ -223,3 +223,18 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
 - `scripts/make_signing_cert.sh`：一键重新生成证书并提示如何更新 Secrets
 - 预期管理：自签名能消除"未知发布者"；**SmartScreen 的下载信誉提示**需商业证书（OV/EV）或 Azure Trusted Signing
 - 版本 0.4.0 → 0.4.1
+
+---
+
+## 0.4.2
+
+**改为 MIT 开源许可证** + 第三方组件合规。
+
+- 新增 `LICENSE`（MIT，Copyright (c) 2026 WANGjia8613）—— 可自由使用/修改/再分发（保留版权声明）
+  - 目的之一：满足 **SignPath Foundation 免费开源代码签名** 的申请前提（需要 OSI 认可许可证）
+- 新增 `THIRD-PARTY-NOTICES.md`：说明随包第三方二进制各自的许可证
+  - `aria2c.exe`（GPL-2.0-or-later）、`7z.exe/7z.dll`（LGPL-2.1+ 且 RAR 部分受 unRAR 限制）
+- 构建流程：从 aria2 官方包中提取 `COPYING`；发布 zip 内现在包含
+  `LICENSE`、`THIRD-PARTY-NOTICES.md`、`README.md`、`CHANGES.md`、`7-Zip-License.txt`、`aria2-COPYING.txt`
+- README 顶部与「许可证与声明」同步更新（不再写"仅供个人自用、请勿分发"）
+- 版本 0.4.1 → 0.4.2

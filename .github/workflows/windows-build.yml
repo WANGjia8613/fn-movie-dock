@@ -123,6 +123,12 @@ jobs:
       - name: 压缩 + 校验和
         shell: pwsh
         run: |
+          # 许可证与声明一起放进包里（MIT + 第三方二进制声明）
+          foreach ($f in @("LICENSE", "THIRD-PARTY-NOTICES.md", "README.md", "CHANGES.md")) {
+            if (Test-Path $f) { Copy-Item $f dist/MovieDock/ -Force }
+          }
+          if (Test-Path vendor/win64/License.txt) { Copy-Item vendor/win64/License.txt dist/MovieDock/7-Zip-License.txt -Force }
+          if (Test-Path vendor/win64/aria2-COPYING.txt) { Copy-Item vendor/win64/aria2-COPYING.txt dist/MovieDock/aria2-COPYING.txt -Force }
           # 把自签名证书与信任脚本一起放进包里，方便用户本机导入信任
           if (Test-Path packaging/selfsigned/moviedock-codesign.cer) {
             Copy-Item packaging/selfsigned/moviedock-codesign.cer dist/MovieDock/ -Force
@@ -130,6 +136,7 @@ jobs:
           if (Test-Path packaging/trust-moviedock-cert.ps1) {
             Copy-Item packaging/trust-moviedock-cert.ps1 dist/MovieDock/ -Force
           }
+          Get-ChildItem dist/MovieDock -Filter *.md | Select-Object Name, Length
           Compress-Archive -Path dist/MovieDock/* -DestinationPath MovieDock-win64.zip -Force
           $hash = (Get-FileHash MovieDock-win64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  MovieDock-win64.zip" | Set-Content -Encoding ASCII SHA256SUMS.txt
@@ -159,6 +166,8 @@ jobs:
             - `MovieDockCLI.exe`：控制台版，排查问题用（`--selftest` / `--headless`）
             - 首次启动会生成配置：`%APPDATA%\MovieDock\config.yaml`
             - 随包已带 `aria2c.exe` 与 `7z.exe/7z.dll`，无需另装
+            - 许可证：本项目为 **MIT**；随包第三方二进制（aria2c=GPL-2.0+，7-Zip=LGPL+unRAR 限制）
+              各自适用原许可证，详见包内 `LICENSE`、`THIRD-PARTY-NOTICES.md` 与两份许可证原文
 
             **关于签名（自签名证书，非商业 CA）**
             - 两个 exe 都已用项目自签名证书签名（SHA256 + 时间戳），SHA1 指纹 `92A2 0205 A8 4C 86 75 86 BD 8E 16 71 D7 B2 B9 A3 1D 2B CC`

@@ -67,20 +67,30 @@ def _seven_zip_binary() -> str | None:
 
 def fetch_aria2_win(out_dir: Path, force: bool = False) -> list[str]:
     target = out_dir / "aria2c.exe"
+    copied: list[str] = []
     if target.exists() and not force:
         print(f"  aria2c.exe 已存在：{target}（{target.stat().st_size} B）")
-        return [str(target)]
-    zip_path = out_dir / "_aria2.zip"
-    download(ARIA2_URL, zip_path, force=True)
-    with zipfile.ZipFile(zip_path) as z:
-        names = [n for n in z.namelist() if n.lower().endswith("aria2c.exe")]
-        if not names:
-            raise RuntimeError("压缩包里没有 aria2c.exe")
-        with z.open(names[0]) as src, target.open("wb") as f:
-            shutil.copyfileobj(src, f)
-    zip_path.unlink(missing_ok=True)
-    print(f"  → {target}（{target.stat().st_size} B）")
-    return [str(target)]
+    else:
+        zip_path = out_dir / "_aria2.zip"
+        download(ARIA2_URL, zip_path, force=True)
+        with zipfile.ZipFile(zip_path) as z:
+            names = [n for n in z.namelist() if n.lower().endswith("aria2c.exe")]
+            if not names:
+                raise RuntimeError("压缩包里没有 aria2c.exe")
+            with z.open(names[0]) as src, target.open("wb") as f:
+                shutil.copyfileobj(src, f)
+            # 顺带取出 GPL 许可证文本（发布包需附）
+            for cand in z.namelist():
+                if cand.lower().endswith(("copying", "license.txt")) and "/" in cand:
+                    text = z.read(cand)
+                    notice = out_dir / "aria2-COPYING.txt"
+                    notice.write_bytes(text)
+                    copied.append(str(notice))
+                    print(f"  → {notice}（{len(text)} B）")
+                    break
+        zip_path.unlink(missing_ok=True)
+        print(f"  → {target}（{target.stat().st_size} B）")
+    return [str(target), *copied]
 
 
 def fetch_sevenzip_win(out_dir: Path, force: bool = False) -> list[str]:
