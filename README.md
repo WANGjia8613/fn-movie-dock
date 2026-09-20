@@ -1,531 +1,291 @@
-# 片坞 Movie Dock 使用说明
+# 片坞 Movie Dock
 
-飞牛 fnOS（x86_64）上的一体化 Docker 应用：在**同一个中文网页**里完成
+**中文一体化片源检索与下载工具**：输入片名 → 检索多清晰度候选 → 选择片源 → 下载（磁力/种子/直链）→ 自动整理进媒体库 → 自动配中文字幕。
 
-**输入片名 → 检索多清晰度候选 → 选择片源 → 应用内下载（磁力/种子/直链）→ 自动整理进电影文件夹 → 显示输出路径**。
+两种形态，同一套内核：
 
-> 个人 NAS 自用工具。请只下载你有权获取与存储的内容；使用后果由使用者自行承担。
+| 形态 | 跑在哪 | 适合 |
+|---|---|---|
+| **Windows 本地客户端** | 你自己的 PC（WebView2 原生窗口） | 不想装 NAS、就想本地一个软件搞定 |
+| **飞牛 NAS / Docker 服务端** | 飞牛 fnOS 或其他 Linux NAS | 7×24 挂着下，家里人共享 |
 
----
-
-> **本仓库为改进版（0.4.x）**：在原版基础上补上了「内置直连索引源 + 自动中文字幕 + 剧集整理 +
-> 候选评分/一键最优 + 任务持久化 + Windows 本地版（WebView2 客户端）」等能力，
-> 改动清单见 [CHANGES.md](CHANGES.md)。上游仓库：<https://github.com/WANGjia8613/fn-movie-dock>。
->
-> **许可证：MIT**（见 [LICENSE](LICENSE)）—— 可自由使用、修改、再分发（保留版权声明即可）。
-> 随包附带的第三方二进制（aria2c / 7-Zip）另有其许可证，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-
-## 目录
-
-1. [功能一览](#1-功能一览)
-2. [环境要求](#2-环境要求)
-3. [飞牛部署（推荐）](#3-飞牛部署推荐)
-4. [首次配置](#4-首次配置)
-5. [日常使用](#5-日常使用)
-6. [整理规则与路径说明](#6-整理规则与路径说明)
-7. [检索源说明](#7-检索源说明)
-8. [本地开发](#8-本地开发)
-9. [配置参考](#9-配置参考)
-10. [故障排查](#10-故障排查)
-11. [项目结构](#11-项目结构)
+> ⚠️ 本工具**不提供、不托管任何影视资源**。请遵守当地法律法规与内容版权，仅下载你有权获取与存储的内容；使用后果由使用者自行承担。
 
 ---
 
-## 1. 功能一览
+## 1. 下载与安装
 
-| 功能 | 说明 |
-|------|------|
-| 中文界面 | 搜索、设置、任务、提示均为中文 |
-| 大模型接入 | 自填 OpenAI 兼容 Base URL / API Key / 模型名，可一键测试 |
-| 多源检索 | 演示数据、大模型检索、自定义 JSON 索引 API |
-| 应用内下载 | 镜像内置 aria2，支持磁力、种子、HTTP 直链 |
-| 自动整理 | `{片名} ({年份})/{片名} ({年份}) - {清晰度}.mkv` |
-| 路径回显 | 任务完成后显示输出路径 |
-| 一站式 | 不必在搜索工具、BT 客户端、文件管理器之间来回切换 |
+**Windows 客户端（最新版）**
+👉 <https://github.com/WANGjia8613/fn-movie-dock/releases>
 
----
+1. 下 `MovieDock-win64.zip` → 解压 → 双击 `MovieDock.exe`
+2. 首次启动会生成配置：`%APPDATA%\MovieDock\config.yaml`，并让你选下载目录
+3. 想彻底去掉"未知发布者"提示：右键 `trust-moviedock-cert.ps1` → 使用 PowerShell 运行（导入自签名证书，见 [§11](#11-代码签名)）
 
-## 2. 环境要求
-
-| 项目 | 要求 |
-|------|------|
-| 系统 | 飞牛 fnOS（x86_64）或其它可跑 Docker 的 Linux NAS |
-| 软件 | Docker + Docker Compose（飞牛应用中心启用 Docker） |
-| 网络 | 能访问你配置的大模型接口；BT 下载需外网可达 |
-| 浏览器 | Chrome / Edge / Safari 等现代浏览器 |
-
-架构说明：当前交付以 **x86_64** 为准；ARM 设备需自行交叉构建镜像。
-
----
-
-## 3. 飞牛部署（推荐）
-
-### 3.1 创建目录
-
-在飞牛文件管理或 SSH 中创建（路径可按实际情况改，改后同步 compose）：
-
-```text
-/vol1/apps/fn-movie-dock/config
-/vol1/apps/fn-movie-dock/data
-/vol1/media
-```
-
-说明：
-
-| 宿主机路径 | 容器路径 | 用途 |
-|------------|----------|------|
-| `/vol1/apps/fn-movie-dock/config` | `/config` | 配置与 API Key（保密） |
-| `/vol1/media` | `/downloads` | 下载临时目录 + 整理后的电影 |
-| `/vol1/apps/fn-movie-dock/data` | `/data` | 预留状态目录 |
-
-推荐把 `/downloads` 挂到 `/vol1/media`，这样整理结果落在：
-
-```text
-/vol1/media/movies/片名 (年份)/片名 (年份) - 清晰度.mkv
-```
-
-### 3.2 获取代码
-
-**方式 A：从 GitHub 克隆（推荐）**
+**飞牛 NAS / Docker（最新版）**
+👉 同版本号**不带 `-win`** 的 Release，例如 `v0.4.2`
 
 ```bash
-cd /vol1/apps
-git clone https://github.com/<你的GitHub用户名>/fn-movie-dock.git
-cd fn-movie-dock
+# 方式一：拉镜像（GHCR）— 国内网络可能很慢/拉不动，见下方说明
+docker pull ghcr.io/wangjia8613/fn-movie-dock:latest
+
+# 方式二：离线镜像包（推荐国内用户）
+#   下载 Release 里的 fn-movie-dock-<版本>-docker-image.tar.gz，传到 NAS 后：
+gunzip -c fn-movie-dock-v0.4.2-docker-image.tar.gz | docker load
+#   或在飞牛「Docker 应用 → 镜像 → 从文件导入」里选这个文件
+
+# 方式三：源码构建（不依赖任何镜像仓库）
+#   把仓库放到 NAS 上，用仓库里的 docker-compose.yml（build: .）
 ```
 
-**方式 B：本机打包上传**
+然后编辑 Release 里的 `docker-compose.release.yml`（改成本机路径）并启动：
 
-将 `D:\fn-projects\movie-dock` 整个目录用 SMB/scp 上传到飞牛，例如 `/vol1/apps/fn-movie-dock-src`。
+```bash
+docker compose -f docker-compose.release.yml up -d
+# 浏览器打开 http://NAS-IP:8090
+```
 
-### 3.3 修改 compose 路径
+> **国内网络提示**：`ghcr.io` 的镜像层下载在国内经常只有几十 B/s（实测），基本拉不完。
+> 所以国内用户请优先用**离线镜像包**或**源码构建**（源码构建只需拉基础镜像与 PyPI，实测可达）。
 
-编辑 `docker-compose.yml` 中的 `volumes`，使其与你的存储空间一致：
+---
+
+## 2. 功能
+
+**检索**
+- **内置直连索引源**（不依赖任何外部客户端）：TPB(apibay) / YTS / DMHY 动漫花园，多镜像自动重试
+- 可选 **qBittorrent 搜索插件**（若本机有 qB）、**自定义索引 API**、**大模型检索**
+- 候选**评分排序**：清晰度 + 做种数 + 特性标签（DoVi/HDR/REMUX/Atmos…）+ 体积合理性 + **关键词相关度**
+- 「**一键最优**」直接选最高分候选
+- 中文片名可用：配了大模型 API Key 会自动翻成英文再搜；也可填该源支持的代理启用中文源
+
+**下载**
+- 内置 **aria2**（磁力 / 种子 / HTTP 直链），默认 `seed-time=0` **不做种**（防 PCDN）
+- 任务独立子目录、**任务状态落盘**（重启不丢、自动接管）
+- **暂停 / 继续**（HTTP 直链任务自动改走断点续传，绕开 aria2 的已知 bug）
+- **删除历史**：只删记录，或连文件一起删（仅限配置目录内，删视频连带同名字幕）
+- 手动粘贴磁力/直链（不依赖任何检索源）
+
+**自动整理**
+- 电影：`{片名} ({年份})/{片名} ({年份}) - {清晰度}.{ext}`
+- 剧集：识别 `S01E02` / `1x03` / `第5集` → `{片名} ({年份})/Season 01/...`
+- 支持 `move` / `copy` / **`hardlink`**（同卷零拷贝入库）
+- 可指定 `library_root` 直接落到已有媒体库
+
+**自动中文字幕**
+- 来源 SubHD：匹配 → 下载 → 解压（**zip / rar / 7z** 全支持）→ 挑最佳 → 重命名为 `<视频名>.zh.ass`
+- 优先**简体/双语 + ASS 特效**；`prefer_simplified` 可选简体优先
+- 防配错：英文关键词搜到同系列短片/别名时，若条目不含片源特征就跳过，宁缺勿错
+- 译名差异可配 `extra_keywords`（如 `["机器人总动员"]`）；配了大模型可自动补中文/英文名
+
+**其它**
+- 中文界面、托盘图标、单实例、日志落盘（Windows: `%APPDATA%\MovieDock\logs\app.log`）
+- 启动页兜底：服务未就绪不会给你一个"拒绝连接"的死窗口
+
+---
+
+## 3. 检索源怎么配
+
+| 源 | 说明 | 国内可达性（实测） |
+|---|---|---|
+| `builtin` **内置索引**（默认开启） | tpb=海盗湾(apibay API) / yts / dmhy=动漫花园 | **tpb 直连可用**；yts/dmhy 建议配代理 |
+| `qbittorrent` | 复用本机 qBittorrent 的搜索插件 | 需本机跑着 qB（WebUI 8085）并可访问插件站点 |
+| `custom_api` | 你自己的 JSON 索引接口（GET/POST） | 取决于你的接口 |
+| `llm` | 大模型整理候选 / 中英片名互译 | 需 OpenAI 兼容接口（DeepSeek 等） |
+| `demo` | **调试用假数据**（假链接，不能下载） | — |
+
+**代理**：境外索引源与字幕站建议在「设置 → 网络（代理）」填本地代理，例如 Clash 混合端口
+`http://127.0.0.1:7890`（Docker 模式可给容器加 `HTTPS_PROXY` 环境变量）。
+
+`config.yaml` 片段：
 
 ```yaml
-volumes:
-  - /vol1/apps/fn-movie-dock/config:/config
-  - /vol1/media:/downloads
-  - /vol1/apps/fn-movie-dock/data:/data
+network:
+  proxy: ""            # 例 http://127.0.0.1:7890
+  timeout_seconds: 20
+search:
+  providers:
+    - type: builtin
+      enabled: true
+      name: "内置索引"
+      options: { sources: "tpb,yts,dmhy", limit: "60" }
+    - type: qbittorrent
+      enabled: false
+      url: "http://127.0.0.1:8085"
+      options: { username: "admin", password: "", plugins: "piratebay" }
 ```
 
-端口默认 `8090`，冲突时改为例如 `18090:8090`。
+自定义索引接口约定：返回 JSON 数组或 `{items|results|sources: [...]}`，
+每项支持 `title/name`、`url/magnet/link`、`quality`、`resolution`、`size`、`seeds`、`note` 等字段。
 
-**不要**在 compose 里写 `LLM_API_KEY` 等环境变量，除非你希望以环境变量为准（其优先级高于界面保存的配置）。
+---
 
-### 3.4 构建并启动
+## 4. 整理规则
+
+```
+{media_root}/{片名} ({年份})/{片名} ({年份}) - {清晰度}.{ext}
+```
+
+- 占位符：`{title}` `{year}` `{quality}` `{resolution}` `{season}` `{episode}` `{ext}`
+- 年份缺失时用 `unknown_year`（默认「未知年份」）
+- 剧集模板：`{title} ({year})/Season {season}` + `{title} ({year}) - S{season}E{episode} - {quality}`
+- `mode`: `move`（默认）/ `copy` / `hardlink`
+- `library_root`：留空则落在下载根目录下；填了就整理到该目录（配合 hardlink 可零拷贝入库）
+
+**路径换算（Docker）**：界面显示的是容器内路径，对照你的挂载表换算即可。
+
+| 容器内 | 你的 NAS（示例） |
+|---|---|
+| `/downloads/incoming/<任务id>/` | `/vol2/1000/movie-md-incoming/incoming/<任务id>/` |
+| `/library/片名 (年份)/` | `/vol2/1000/movie/片名 (年份)/` |
+| `/config`、`/data` | `/vol1/@appcenter/movie-dock/{config,data}` |
+
+---
+
+## 5. 命令行与自检
+
+打包内含两个可执行文件：
 
 ```bash
-cd /vol1/apps/fn-movie-dock
-docker compose up -d --build
+MovieDock.exe        # GUI（WebView2 窗口）
+MovieDockCLI.exe     # 控制台版：排查问题用
 ```
-
-查看状态：
 
 ```bash
-docker compose ps
-docker logs -f movie-dock
+MovieDockCLI.exe --selftest                    # 启动→自检→退出（环境/引擎/接口）
+MovieDockCLI.exe --headless --port 8090        # 只跑服务，不开窗口
+MovieDockCLI.exe --browser                     # 用默认浏览器代替内置窗口
+MovieDockCLI.exe --download-dir "D:\Movies"    # 指定下载目录（首次运行写入配置）
+MovieDockCLI.exe --startup-timeout 120         # 首次启动慢可调大等待时间
 ```
 
-健康检查通过后，日志中应能看到 Web 服务监听端口。
+配置与日志位置：
 
-### 3.5 打开界面
-
-浏览器访问：
-
-```text
-http://<飞牛内网IP>:8090
-```
-
-若无法访问，在飞牛系统设置中放行对应 TCP 端口。
+| 平台 | 配置 | 日志 |
+|---|---|---|
+| Windows | `%APPDATA%\MovieDock\config.yaml` | `%APPDATA%\MovieDock\logs\app.log` |
+| Docker | `/config/config.yaml` | 容器内 `/data/aria2.log` + `docker logs` |
+| Linux 桌面 | `~/.config/movie-dock/config.yaml` | 同目录 `logs/` |
 
 ---
 
-## 4. 首次配置
-
-1. 打开页面后，点右上角 **设置**
-2. 在 **大模型** 区域填写：
-
-| 字段 | 示例 |
-|------|------|
-| Base URL | `https://api.openai.com/v1` 或你的中转/自建地址 |
-| API Key | `sk-...`（只保存在 NAS 的 `/config/config.yaml`） |
-| 模型名 | `gpt-4o-mini`、`deepseek-chat` 等 |
-
-3. 点 **测试连接**，显示「连接成功」后点 **保存设置**
-4. 在 **检索源** 中：
-   - 保持 **演示数据** 启用，便于先熟悉界面
-   - 启用 **大模型检索**
-   - 如有自定义索引，启用 **自定义索引** 并填写接口 URL
-5. 确认 **整理规则**（文件夹/文件名模板、移动/复制/硬链接）
-6. 页面底部可查看下载根目录是否为 `/downloads`
-
-请求只会发往你填写的 Base URL；应用本身不代理、不上传 Key。
-
----
-
-## 5. 日常使用
-
-### 5.1 检索
-
-1. 在顶部输入电影/剧集名称（可选年份、清晰度偏好）
-2. 可勾选「下载完成后自动整理到电影文件夹」
-3. 点 **搜索**
-4. 查看候选列表：清晰度、体积、做种数、来源、链接类型
-
-### 5.2 下载
-
-1. 在候选中点 **选择并下载**
-2. 在弹窗中确认：
-   - 用于整理的片名、年份、清晰度
-   - 下载链接（磁力 / 种子 / 直链）
-   - 是否自动整理
-3. 点 **开始下载**
-4. 右侧 **下载任务** 查看进度；完成后卡片会显示 **输出路径**
-
-### 5.3 手动粘贴链接
-
-- 在检索结果区域 **双击**，可粘贴磁力/种子 URL/HTTP 直链
-- 适合：已有磁力、大模型未给出链接、或使用外部索引时
-
-### 5.4 与飞牛影视配合（可选）
-
-整理完成后，将飞牛影视的媒体库文件夹指向：
-
-```text
-/vol1/media/movies
-```
-
-即可用飞牛自带刮削与播放；「找源 → 下载 → 落库」仍在片坞内完成。
-
----
-
-## 6. 整理规则与路径说明
-
-### 默认规则
-
-```text
-{download_root}/movies/{title} ({year})/{title} ({year}) - {quality}{ext}
-```
-
-示例（容器内）：
-
-```text
-/downloads/movies/沙丘2 (2024)/沙丘2 (2024) - 1080p.mkv
-```
-
-对应飞牛（按推荐挂载 `/vol1/media:/downloads`）：
-
-```text
-/vol1/media/movies/沙丘2 (2024)/沙丘2 (2024) - 1080p.mkv
-```
-
-### 模板占位符
-
-| 占位符 | 含义 |
-|--------|------|
-| `{title}` | 片名 |
-| `{year}` | 年份（缺失时用「未知年份」） |
-| `{quality}` / `{resolution}` | 清晰度标签 |
-| `{ext}` | 扩展名（不含点） |
-
-### 整理方式
-
-| 模式 | 行为 |
-|------|------|
-| move（默认） | 移动到电影目录 |
-| copy | 复制，保留 incoming 中的文件 |
-| hardlink | 硬链接（同分区省空间；失败则回退复制） |
-
-在设置中修改模板后 **保存设置** 即生效；也可在每次下载弹窗里临时确认片名/年份。
-
----
-
-## 7. 检索源说明
-
-### 7.1 演示数据
-
-内置固定候选，用于验证界面与任务流程。链接通常无法真实下载。
-
-### 7.2 大模型检索
-
-- 使用你配置的 OpenAI 兼容接口
-- 适合：理解片名、整理结构化候选、解释差异
-- **不保证**每次都能给出真实可用的磁力；结果仅作候选
-- 未配置 API Key 时会自动跳过并提示
-
-### 7.3 自定义索引 API
-
-适合你自己维护的索引/元数据服务，接口约定：
-
-**请求**
-
-- GET：查询参数 `q`（或 `query`）、`year`、`quality`
-- POST：JSON 提交相同字段
-
-**响应**
-
-JSON 数组，或 `{ "items": [...] }` / `{ "results": [...] }` / `{ "sources": [...] }`
-
-每项字段（兼容多种命名）：
-
-```json
-{
-  "title": "沙丘2 (2024) 1080p BluRay",
-  "url": "magnet:?xt=urn:btih:...",
-  "quality": "1080p",
-  "resolution": "1080p",
-  "size": "8.4GB",
-  "seeds": 56,
-  "note": "可选说明"
-}
-```
-
-兼容字段：`name`、`magnet`、`link`、`comment` 等。
-
-在 **设置 → 检索源 → 自定义索引** 中填写名称、URL、GET/POST，启用后保存。
-
----
-
-## 8. 本地开发
-
-仅在指定项目目录内操作，不污染系统目录。
-
-```powershell
-cd D:\fn-projects\movie-dock
-
-# 使用环境自带 Python 创建项目内虚拟环境
-& "C:\Users\31571\AppData\Local\Programs\Xiaomi MiMo\resources\runtimes\win32-x64\python\python.exe" -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8090
-```
-
-浏览器打开 `http://127.0.0.1:8090`。
-
-本地注意：
-
-- 未运行 aria2 时，HTTP 直链仍可下载；磁力/种子需 Docker 内引擎
-- 本地下载目录默认在项目下 `downloads/`（可用环境变量 `DOWNLOAD_ROOT` 覆盖）
-- 回归脚本：`python scripts/review_checks.py`
-- 冒烟脚本：`python scripts/smoke_local.py`
-
-**不要提交** `config.yaml`（可能含 Key）、`downloads/`、`.venv/`（已在 `.gitignore` 中排除）。公开仓库请只使用 `config.example.yaml`。
-
----
-
-## 9. 配置参考
-
-### 9.1 配置优先级
-
-1. 环境变量（Docker Compose）
-2. `/config/config.yaml`（界面「保存设置」写回这里）
-3. 代码内默认值
-
-若 compose 中设置了 `LLM_API_KEY` 等，**界面修改会被环境变量覆盖**；要完全用界面配置，请去掉 compose 中的相关 env。
-
-### 9.2 常用环境变量
-
-| 变量 | 含义 |
-|------|------|
-| `LLM_BASE_URL` | 大模型接口地址 |
-| `LLM_API_KEY` | API Key |
-| `LLM_MODEL` | 模型名 |
-| `DOWNLOAD_ROOT` | 容器内下载根目录，默认 `/downloads` |
-| `ARIA2_RPC_URL` | 默认 `http://127.0.0.1:6800/jsonrpc` |
-| `ARIA2_RPC_SECRET` | aria2 RPC 密钥（可选） |
-| `SERVER_PORT` | Web 端口，默认 `8090` |
-| `MAX_CONCURRENT` | aria2 并发下载数 |
-
-### 9.3 示例配置
-
-见仓库内 [`config.example.yaml`](./config.example.yaml)。部署后复制为 `/config/config.yaml`。
-
----
-
-## 10. 故障排查
-
-| 现象 | 处理 |
-|------|------|
-| 打不开网页 | 检查容器是否运行、端口是否放行、IP:端口是否正确 |
-| 搜索只有演示数据 | 设置中启用大模型检索或配置自定义索引 |
-| 大模型测试失败 | 核对 Base URL（常需 `/v1`）、Key、模型名；用「测试连接」看报错 |
-| 界面改了 Key 无效 | 检查 compose 是否写了 `LLM_API_KEY`（env 优先） |
-| 磁力一直排队/失败 | 看 `docker logs movie-dock` 与容器内 `/var/log/aria2.log`；确认 RPC 为 `http://127.0.0.1:6800/jsonrpc` |
-| 设置重启后丢失 | 升级到 0.1.1+（已修复配置持久化）；确认 `/config` 已挂载可写 |
-| 整理路径不对 | 核对模板与 `/downloads` 挂载；界面显示的是容器内路径 |
-| 端口占用 | 修改 compose 左侧端口后 `docker compose up -d` |
-| 自定义索引无结果 | 用 curl 验证接口；确认 JSON 字段与 URL 可下载 |
-
-### 更新
-
-```bash
-cd /vol1/apps/fn-movie-dock
-git pull   # 或重新上传代码
-docker compose up -d --build
-```
-
-### 卸载
-
-```bash
-cd /vol1/apps/fn-movie-dock
-docker compose down
-# 电影文件与配置保留在 volumes 目录，确认后再手动删除
-```
-
----
-
-## 11. 项目结构
-
-```text
-fn-movie-dock/
-├── README.md                 # 本使用说明
-├── Dockerfile
-├── docker-compose.yml
-├── config.example.yaml       # 配置示例（可提交）
-├── requirements.txt
-├── app/
-│   ├── main.py               # FastAPI 入口
-│   ├── config.py             # 配置加载/持久化
-│   ├── llm.py                # OpenAI 兼容客户端与结果解析
-│   ├── api/routes.py         # HTTP API
-│   ├── search/               # 检索 Provider
-│   ├── downloader/           # aria2 + HTTP 下载
-│   ├── organizer/            # 自动整理
-│   └── static/               # 中文前端
-├── docker/entrypoint.sh      # 启动 aria2 + Web
-├── deploy/fnos-deploy.md     # 飞牛部署补充说明
-└── scripts/                  # 本地回归/冒烟脚本
-```
-
----
-
-## API 速查（高级用户）
+## 6. API 速查（高级用户）
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/health` | 健康检查 |
-| GET/PUT | `/api/config` | 读/写配置 |
-| POST | `/api/llm/test` | 测试大模型连通性 |
-| POST | `/api/search` | 检索候选 |
-| POST | `/api/download` | 创建下载任务 |
+|---|---|---|
+| GET | `/api/health` | 健康检查（含版本号） |
+| GET/PUT | `/api/config` | 读写配置（保存即热更新） |
+| POST | `/api/search` | 检索候选（返回 `tags`/`score`/`best_id`） |
+| POST | `/api/download` | 建下载任务（`fetch_subtitle` 控制是否配字幕） |
 | GET | `/api/tasks` | 任务列表 |
-| GET | `/api/downloader/status` | aria2 状态 |
+| POST | `/api/tasks/{id}/pause｜resume` | 暂停 / 继续 |
+| DELETE | `/api/tasks/{id}?delete_files=` | 删除任务（可选连文件删除） |
+| POST | `/api/tasks/clear` | 批量清理（`scope=completed\|error\|all`） |
+| POST | `/api/tasks/{id}/subtitle` | 重试字幕匹配 |
+| GET | `/api/subtitle/candidates?keyword=` | 列出 SubHD 字幕条目（人工核对） |
 | POST | `/api/organize/preview` | 整理路径预览 |
+| GET | `/api/downloader/status` | aria2 状态 |
 
 ---
 
-## 许可证与声明
+## 7. Docker 部署细节（飞牛为例）
 
-- 本项目代码以 **MIT** 许可证发布，见 [LICENSE](LICENSE)；可自由使用、修改、再分发（保留版权与许可声明）
-- 发布包中随附的第三方二进制（`aria2c.exe` GPL-2.0+、`7z.exe/7z.dll` LGPL + unRAR 限制）
-  各自适用其原许可证，详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+| 宿主路径 | 容器路径 | 用途 |
+|---|---|---|
+| `/vol1/@appcenter/movie-dock/config` | `/config` | 配置（含 API Key / qB 密码，注意保密） |
+| `/vol2/1000/movie-md-incoming` | `/downloads` | 下载临时目录（建议放空间大的存储空间） |
+| `/vol1/@appcenter/movie-dock/data` | `/data` | 任务状态（重启不丢） |
+| `/vol2/1000/movie` | `/library` | 电影库（可选，配合 `organize.library_root: /library`） |
+
+**权限要点**：飞牛的媒体库目录常受 `trimacl` 限制，只有特定 uid 能写。
+容器默认以 `user: "1002:1002"`（应用账号）运行；若你的环境不同，改成能写目标目录的 uid，
+或给该目录加 ACL。部署后先测一下：
+
+```bash
+docker exec movie-dock sh -c 'touch /library/.w && rm /library/.w && echo 可写'
+```
+
+**容器与服务端通信**：aria2 跑在容器内（应用连 `127.0.0.1:6800`，无需额外配置）。
+若要连**宿主**上的 qBittorrent（WebUI），用 `extra_hosts: ["host.docker.internal:host-gateway"]`
+并把 provider `url` 写成 `http://host.docker.internal:8085`。
+
+---
+
+## 8. 项目结构
+
+```
+app/
+├── main.py            FastAPI 入口
+├── config.py          配置模型（含跨平台落位、老配置迁移）
+├── runtime.py         跨平台运行时（工具探测 / aria2 托管 / 目录 / UTF-8）
+├── ranking.py         候选评分（清晰度/做种/特性/相关度）
+├── api/routes.py      HTTP API
+├── search/            builtin(tpb/yts/dmhy) · qbittorrent · custom_api · llm · demo
+├── downloader/        aria2 管理（暂停/续传/删除/任务持久化）
+├── organizer/         整理规则（电影/剧集/硬链/模板）
+├── subtitle/          SubHD 客户端 + 解压兜底 + 条目打分
+├── desktop/           桌面启动器（launcher / window / tray）
+└── static/            中文界面（index.html / app.js / style.css / splash.html）
+scripts/               fetch_vendor · 单测 · 端到端/任务操作测试 · 签名证书生成
+packaging/             PyInstaller 规格、图标、自签名证书与信任脚本
+.github/workflows/     ci(ubuntu) · windows-build(出 Windows Release) · docker-release(出镜像与离线包)
+```
+
+---
+
+## 9. 开发与测试
+
+```bash
+python -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+python scripts/review_checks.py     # 上游回归
+python scripts/unit_checks.py       # 新增功能单测（含内置源解析/迁移/暂停删除）
+python scripts/desktop_checks.py    # 桌面与跨平台层
+python scripts/ci_download_test.py  # 端到端：本地 HTTP → aria2 下载 → 整理
+python scripts/ci_ops_test.py       # 端到端：暂停 / 继续 / 删除历史
+python -m app.desktop --headless    # 本地起服务（桌面模式）
+```
+
+CI：每次 push 跑 ubuntu 全量测试；打 tag `v*-win` 出 Windows Release；打 tag `v*` 出 Docker 镜像与离线包。
+
+---
+
+## 10. 常见问题
+
+| 现象 | 处理 |
+|---|---|
+| Windows 打开显示"127.0.0.1 拒绝连接" | 首次启动被杀软扫描拖慢：新版会先显示"片坞正在启动…"并自动跳转；不行就按 F5，或看 `logs/app.log` |
+| 搜索没结果 | 确认「设置 → 检索源」里**内置索引**已勾选；中文片名在英文站无效，用英文名或配代理启用 dmhy，或配大模型自动翻译 |
+| 内置源连不上 | 配「网络（代理）」；tpb 源不需要代理 |
+| 字幕没配上 | 在字幕设置里填 `extra_keywords`（SubHD 常搜不到英文名），下完后可在任务卡点「重试字幕」 |
+| Docker 拉不动镜像 | 用离线镜像包或源码构建（见 §1） |
+| 整理时报权限错误 | 容器 `user:` 改成能写目标目录的 uid，或给目录加 ACL |
+| 任务重启后不见了 | 新版会把任务落盘到 `/data/tasks.json` 并自动接管；若 aria2 会话丢失，任务会标为"已中断" |
+
+---
+
+## 11. 代码签名
+
+- Windows 包里的两个 exe 已用项目**自签名证书**签名（SHA256 + 时间戳），SHA1 指纹
+  `92A20205A84C867586BD8E1671D7B2B9A31D2BCC`
+- 想彻底去掉"未知发布者"提示：右键 `trust-moviedock-cert.ps1` → 使用 PowerShell 运行
+  （导入"受信任的根"与"受信任的发布者"），之后 `Get-AuthenticodeSignature .\MovieDock.exe` 应显示 `Valid`
+- **预期管理**：自签名能消除"未知发布者"，但 **SmartScreen 的下载信誉提示**需要商业代码签名证书（OV/EV）
+  或 Azure Artifact Signing 之类的公众信任方案；不想折腾就右键 zip → 属性 → 勾选"解除锁定"
+- 维护者换证书：`scripts/make_signing_cert.sh`（生成后把 pfx/口令/指纹写入 GitHub Secrets）
+
+---
+
+## 12. 许可证与声明
+
+- 本项目代码以 **MIT** 许可证发布，见 [LICENSE](LICENSE)：可自由使用、修改、再分发（保留版权与许可声明）
+- 发布包中随附的第三方二进制各自适用其原许可证：
+  `aria2c.exe`（GPL-2.0-or-later）、`7z.exe/7z.dll`（LGPL-2.1+，RAR 部分受 unRAR 限制），
+  详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 - 公开仓库中的示例配置**不含**任何真实 API Key
-- 本项目**不提供、不托管任何影视资源**；请遵守当地法律法规与内容版权，
-  仅下载你有权获取与存储的内容，使用后果由使用者自行承担
+- 本项目**不提供、不托管任何影视资源**；请遵守当地法律法规与内容版权，使用后果由使用者自行承担
 - 通常无法上架飞牛官方应用中心
-
----
 
 ## 反馈
 
-若在飞牛上部署遇到问题，可附上：
-
-1. `docker compose ps` 与 `docker logs movie-dock` 关键片段  
-2. 设置页中「测试连接」的报错  
-3. 任务卡片上的错误信息  
-
-便于定位是网络、模型接口还是下载引擎问题。
-
----
-
-## 12. 本改进版新增能力（0.1.2）
-
-### 12.1 qBittorrent 检索源（推荐默认用这个）
-
-原版的检索源里，演示数据是假的、大模型容易编链接。本版新增 `qbittorrent` provider：
-直接复用本机 qBittorrent 的搜索插件（yts / bt4g / kickass / limetorrents …），结果是**真实可用**的磁力/种子。
-
-```yaml
-search:
-  providers:
-    - type: qbittorrent
-      enabled: true
-      name: "qBittorrent 搜索"
-      url: "http://127.0.0.1:8085"      # qB WebUI 地址
-      options:
-        username: "admin"
-        password: "******"
-        plugins: "yts,yts_am,bt4g,limetorrents,kickass_torrent"   # 留空=全部（容易被慢插件拖住）
-        limit: "100"
-        search_timeout: "45"
-```
-
-要点：
-- 需要先在 qBittorrent「搜索」页**安装搜索插件**，否则会提示未检测到插件
-- 一个插件卡住会拖慢整次搜索 → 建议固定几个快的；内置默认推荐列表见代码常量 `DEFAULT_PLUGIN_HINT`
-- 搜索结束会自动 `stop` + `delete` 搜索任务，不在 qB 里留垃圾
-
-### 12.2 候选评分与「一键最优」
-
-- 后端按 **清晰度 + 做种数 + 特性标签（DoVi/HDR/REMUX/Atmos…）+ 体积合理性** 打分
-- 界面候选卡片显示 `评分 / DoVi / HDR / 做种 / 体积` 标签，最高分那条打「推荐」标记
-- 搜索框旁「一键最优」按钮：直接用最高分候选打开下载弹窗
-- 体积过小的 4K（<6GB）会被明显扣分，避免选到假种/低码率
-
-### 12.3 下载完成后自动配中文字幕
-
-- 来源 SubHD，流程：片名 → 字幕条目 → 下载 → 解压 → 挑最佳 → 改名成 `<视频名>.zh.ass` 放视频同目录
-- 选择策略：优先 **简体/双语、ASS 特效**；条目里命中片源特征（2160p/UHD/BDRemux/发布组…）加分
-- 防配错：英文关键词搜到的是同系列短片/别名时（例如用 `WALL-E` 搜到《电焊工波力》），
-  若条目里找不到任何片源特征就**跳过不配**，而不是配一个错的
-- 支持 **.rar / .7z 归档**（容器内已装 `p7zip-full` + `libarchive-tools`，rar5 也能读）
-- 字幕文本非 UTF-8（GBK/Big5）会自动转 UTF-8
-- 大陆/台湾译名差异：配置 `subtitle.extra_keywords`（如 `["机器人总动员"]`）；
-  若配了大模型且候选里全是英文，还会**自动让模型补中文译名**再搜
-- 任务卡片显示「字幕已配好 / 未匹配到字幕」，失败可点「重试字幕」
-
-```yaml
-subtitle:
-  enabled: true
-  extra_keywords: []
-  prefer_bilingual: true
-  name_template: "{video}.zh"
-  llm_translate: true
-  max_movies: 2
-```
-
-### 12.4 整理增强：剧集 / 资料库直落 / 扩展名
-
-- 识别 `S01E02`、`s1e2`、`1x03`、`第5集`、`E07` → 走剧集模板
-  （默认 `{title} ({year})/Season {season}` + `{title} ({year}) - S{season}E{episode} - {quality}`）
-- 修正原版 preview 硬写 `.mkv` 的问题，**保留原扩展名**（.mp4/.ts/.iso…）
-- 新增 `organize.library_root`：整理结果可直接落到已有电影库（如 `/vol2/1000/movie`），
-  配合 `mode: hardlink` 可零拷贝入库
-
-### 12.5 下载与任务健壮性
-
-- **每个任务独立子目录** `incoming/<task_id>/`：修掉原版并发任务「按文件名猜该整理谁」的误整理风险
-- 整理文件优先级：aria2 回报的准确文件列表 → 任务自己的目录兜底
-- **任务状态落盘** `/data/tasks.json`：容器重启后任务列表不丢；重启后丢失的下载任务标记为「已中断」并给出提示
-- aria2 参数补强：`seed-time=0`/`seed-ratio=0`（不做种，防 PCDN）、DHT、LPD、BT tracker（`downloader.bt_trackers`）、
-  `extra_options` 可透传任意 aria2 参数
-
-### 12.6 新增/变更 API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/provider-types` | 检索源类型中文名 |
-| POST | `/api/tasks/{task_id}/subtitle` | 重试字幕匹配 |
-| GET | `/api/subtitle/candidates?keyword=` | 列出 SubHD 字幕条目（人工核对用） |
-| GET | `/api/config` | 新增 `subtitle`、`search_sort_by_score` 字段 |
-| POST | `/api/search` | 返回 `tags` / `score` / `best_id` |
-| POST | `/api/download` | 新增 `fetch_subtitle` |
-| POST | `/api/organize/preview` | 支持 `episode_text` / `ext`，返回 `is_series` |
-
-### 12.7 回归测试
-
-```bash
-python scripts/review_checks.py   # 原版回归（22 项）
-python scripts/unit_checks.py     # 本版新增功能（31 项）
-python scripts/smoke_local.py     # 冒烟（起本地服务跑真实 API）
-```
+提 Issue 时建议附上：系统/版本号、`MovieDockCLI.exe --selftest` 输出（或 `logs/app.log` 关键片段）、
+复现步骤与截图。检索源问题请说明用哪个源、关键词、以及是否配了代理。
