@@ -66,7 +66,13 @@ def serve_file(directory: Path, port: int) -> subprocess.Popen:
     raise RuntimeError("本地 HTTP 服务启动失败")
 
 
-def write_test_config(path: Path, download_root: Path, state_dir: Path, aria2_port: int) -> None:
+def write_test_config(
+    path: Path,
+    download_root: Path,
+    state_dir: Path,
+    aria2_port: int,
+    extra_options: dict | None = None,
+) -> None:
     import yaml
 
     cfg = {
@@ -99,6 +105,7 @@ def write_test_config(path: Path, download_root: Path, state_dir: Path, aria2_po
             "max_concurrent": 2,
             "category_dir": "incoming",
             "per_task_dir": True,
+            "extra_options": extra_options or {},
         },
         # CI 里不依赖外网字幕站
         "subtitle": {"enabled": False, "provider": "subhd"},

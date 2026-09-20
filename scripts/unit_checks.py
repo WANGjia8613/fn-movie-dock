@@ -488,6 +488,102 @@ check("migrate_persisted",
       "写入配置")
 os.environ["MOVIE_DOCK_CONFIG"] = str(TMP / "config.yaml")
 
+# ---------- 13) 暂停/继续/删除历史 ----------
+class _FakeAria2Calls:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.fail: set[str] = set()
+
+    async def call(self, method: str, params: list | None = None) -> str:  # noqa: ANN001
+        if method in self.fail:
+            raise RuntimeError("boom")
+        self.calls.append((method, params))
+        return "OK"
+
+    async def tell_status(self, gid: str) -> dict:
+        return {}
+
+
+del_root = Path(tempfile.mkdtemp(prefix="moviedock-del-"))
+cfg3 = load_config(TMP / "config.yaml")
+cfg3.paths.download_root = str(del_root / "dl")
+cfg3.paths.state_dir = str(del_root / "data")
+cfg3.organize.library_root = ""
+cfg3.subtitle.enabled = False
+save_app_config(cfg3)
+cfg3 = load_config(TMP / "config.yaml")
+mgr4 = DownloadManager(cfg3)
+fake_aria2 = _FakeAria2Calls()
+mgr4.aria2 = fake_aria2  # type: ignore[assignment]
+
+# 准备一份“已下载完成”的产物：视频 + 同名字幕 + 任务临时目录
+task_dir = Path(cfg3.download_root()) / "incoming" / "t1"
+task_dir.mkdir(parents=True, exist_ok=True)
+(task_dir / "junk.torrent").write_bytes(b"x")
+movie_dir = Path(cfg3.download_root()) / "movies" / "Demo (2020)"
+movie_dir.mkdir(parents=True, exist_ok=True)
+video = movie_dir / "Demo (2020) - 1080p.mkv"
+video.write_bytes(b"v" * 128)
+sub_zh = movie_dir / "Demo (2020) - 1080p.zh.ass"
+sub_zh.write_bytes(b"s" * 32)
+sub_other = movie_dir / "Other.zh.ass"
+sub_other.write_bytes(b"o" * 8)
+
+t1 = DownloadTask(task_id="t1", title="Demo", url="magnet:?xt=urn:btih:aaaa", status="active",
+                  gid="gA", engine="aria2", created_at="2026-01-05T00:00:00+08:00",
+                  incoming_dir=str(task_dir), organized_path=str(video), subtitle_path=str(sub_zh))
+mgr4.tasks = {"t1": t1}
+
+out_pause = _aio.run(mgr4.pause_task(t1))
+check("task_pause", out_pause.status == "paused" and ("aria2.pause", ["gA"]) in fake_aria2.calls, out_pause.status)
+out_resume = _aio.run(mgr4.resume_task(t1))
+check("task_resume", out_resume.status == "active" and ("aria2.unpause", ["gA"]) in fake_aria2.calls, out_resume.status)
+
+http_task = DownloadTask(task_id="h1", title="http", url="https://x/a.bin", status="active", engine="http")
+out_http = _aio.run(mgr4.pause_task(http_task))
+check("task_pause_http_unsupported", "不支持暂停" in (out_http.error or ""), out_http.error)
+
+# 只删记录：文件必须保留
+res1 = _aio.run(mgr4.remove_task("t1", delete_files=False))
+check("remove_task_keeps_files",
+      res1["ok"] and "t1" not in mgr4.tasks and video.exists() and sub_zh.exists(),
+      str(res1.get("removed_files")))
+
+# 连文件一起删：视频 + 同名字幕 + 临时目录；不相关字幕保留
+mgr4.tasks = {"t1": t1}
+res2 = _aio.run(mgr4.remove_task("t1", delete_files=True))
+check("remove_task_deletes_files",
+      (not video.exists()) and (not sub_zh.exists()) and (not task_dir.exists()),
+      str(res2.get("removed_files")))
+check("remove_task_keeps_unrelated_sub", sub_other.exists(), str(sub_other))
+
+# 越界保护：路径在配置目录外 → 不删
+outside = Path(tempfile.mkdtemp(prefix="moviedock-outside-")) / "important.mkv"
+outside.write_bytes(b"keep")
+t3 = DownloadTask(task_id="t3", title="out", url="magnet:?xt=urn:btih:b", status="complete",
+                  organized_path=str(outside), created_at="2026-01-06T00:00:00+08:00")
+mgr4.tasks = {"t3": t3}
+res3 = _aio.run(mgr4.remove_task("t3", delete_files=True))
+check("remove_task_guards_outside_roots", outside.exists() and not res3["removed_files"],
+      str(res3["removed_files"]))
+
+# 清空已完成
+finished = DownloadTask(task_id="f1", title="f", url="magnet:?xt=urn:btih:c", status="complete",
+                        created_at="2026-01-07T00:00:00+08:00")
+running = DownloadTask(task_id="r1", title="r", url="magnet:?xt=urn:btih:d", status="active",
+                       gid="gR", engine="aria2", created_at="2026-01-08T00:00:00+08:00")
+mgr4.tasks = {"f1": finished, "r1": running}
+res4 = _aio.run(mgr4.clear_tasks("completed"))
+check("clear_completed_only", res4["removed"] == 1 and "f1" not in mgr4.tasks and "r1" in mgr4.tasks,
+      f"removed={res4['removed']}")
+
+# 前端入口存在性
+js_text2 = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+html_text2 = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+check("ui_task_actions", all(k in js_text2 for k in ("btn-task-pause", "btn-task-resume", "btn-task-delete", "taskActionsHtml")), "ok")
+check("ui_clear_finished", 'id="btn-clear-finished"' in html_text2 and "btn-clear-finished" in js_text2, "ok")
+check("ui_demo_hint", "调试用" in html_text2 and "调试用" in js_text2, "ok")
+
 # ---------- 输出 ----------
 print("=" * 68)
 failed = 0

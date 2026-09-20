@@ -49,6 +49,10 @@ jobs:
       - name: 端到端下载链路（aria2 → 整理）
         run: python scripts/ci_download_test.py --port 8095 --aria2-port 6802 --size-mb 4
 
+      - name: 任务操作链路（暂停/继续/删除历史）
+        shell: bash
+        run: python scripts/ci_ops_test.py --port 8087 --aria2-port 6807 --size-mb 12
+
       - name: 桌面启动器自检（headless）
         run: |
           python -m app.desktop --selftest --port 8098 \

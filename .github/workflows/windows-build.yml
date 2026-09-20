@@ -57,6 +57,10 @@ jobs:
         shell: bash
         run: python scripts/ci_download_test.py --port 8095 --aria2-port 6802 --size-mb 4
 
+      - name: 任务操作链路（暂停/继续/删除历史）
+        shell: bash
+        run: python scripts/ci_ops_test.py --port 8087 --aria2-port 6807 --size-mb 12
+
       - name: PyInstaller 打包
         shell: bash
         run: pyinstaller packaging/moviedock.spec --noconfirm

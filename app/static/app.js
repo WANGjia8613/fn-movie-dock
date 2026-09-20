@@ -86,7 +86,7 @@ function showToast(msg, type = "info") {
 
 const PROVIDER_LABELS = {
   builtin: "内置索引",
-  demo: "演示数据",
+  demo: "演示数据（调试用，假链接）",
   llm: "大模型检索",
   qbittorrent: "qBittorrent 搜索",
   custom_api: "自定义索引",
@@ -457,6 +457,20 @@ function taskSubtitleHtml(t) {
   return `<div class="path ${cls}">${escapeHtml(label)}${path}</div>${note}${retry}`;
 }
 
+function taskActionsHtml(t) {
+  const buttons = [];
+  if (["active", "queued", "waiting"].includes(t.status)) {
+    buttons.push(`<button class="btn ghost btn-task-pause" type="button" data-task="${escapeHtml(t.task_id)}">暂停</button>`);
+  }
+  if (t.status === "paused") {
+    buttons.push(`<button class="btn ghost btn-task-resume" type="button" data-task="${escapeHtml(t.task_id)}">继续</button>`);
+  }
+  buttons.push(`<button class="btn ghost btn-task-delete" type="button" data-task="${escapeHtml(t.task_id)}"
+    data-title="${escapeHtml(t.title || "")}"
+    data-path="${escapeHtml(t.organized_path || t.saved_path || "")}">删除</button>`);
+  return `<div class="task-actions">${buttons.join("")}</div>`;
+}
+
 function renderTasks(tasks) {
   const box = $("#tasks");
   if (!tasks || !tasks.length) {
@@ -490,6 +504,7 @@ function renderTasks(tasks) {
         ${pathHtml}
         ${errHtml}
         ${taskSubtitleHtml(t)}
+        ${taskActionsHtml(t)}
       </article>
     `;
   }).join("");
@@ -665,16 +680,98 @@ function bindEvents() {
   window.addEventListener("pageshow", () => { state.pollInterval = 1500; loadTasks(); });
 
   on("#tasks", "click", async (e) => {
-    const btn = e.target.closest(".btn-retry-sub");
-    if (!btn) return;
-    const id = btn.getAttribute("data-task");
-    btn.disabled = true;
-    btn.textContent = "匹配中…";
+    const pauseBtn = e.target.closest(".btn-task-pause");
+    const resumeBtn = e.target.closest(".btn-task-resume");
+    const deleteBtn = e.target.closest(".btn-task-delete");
+    const retryBtn = e.target.closest(".btn-retry-sub");
+
+    if (pauseBtn || resumeBtn) {
+      const btn = pauseBtn || resumeBtn;
+      const id = btn.getAttribute("data-task");
+      btn.disabled = true;
+      try {
+        const data = await api(`/api/tasks/${encodeURIComponent(id)}/${pauseBtn ? "pause" : "resume"}`, { method: "POST" });
+        showToast(pauseBtn ? "已暂停" : "已继续", "ok");
+        if (data && data.error) showToast(data.error, "err");
+      } catch (err) {
+        showToast(err.message || "操作失败", "err");
+      } finally {
+        await loadTasks();
+      }
+      return;
+    }
+
+    if (deleteBtn) {
+      const id = deleteBtn.getAttribute("data-task");
+      const title = deleteBtn.getAttribute("data-title") || "该任务";
+      const path = deleteBtn.getAttribute("data-path") || "";
+      if (confirm(`从下载列表删除「${title}」？\n\n点「确定」= 只删除记录（已下载的文件保留）`)) {
+        try {
+          await api(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
+          showToast("已从列表删除", "ok");
+        } catch (err) {
+          showToast(err.message || "删除失败", "err");
+        } finally {
+          await loadTasks();
+        }
+        return;
+      }
+      const tip = path
+        ? `要连文件一起删除吗？\n\n${path}\n（含同名字幕；仅限下载目录/资料库目录内）\n\n点「确定」= 永久删除，不可恢复`
+        : "这个任务没记录输出路径，要连下载临时目录一起删除吗？\n\n点「确定」= 永久删除，不可恢复";
+      if (confirm(tip)) {
+        try {
+          const res = await api(`/api/tasks/${encodeURIComponent(id)}?delete_files=true`, { method: "DELETE" });
+          showToast(`已删除（文件 ${(res.removed_files || []).length} 项）`, "ok");
+        } catch (err) {
+          showToast(err.message || "删除失败", "err");
+        } finally {
+          await loadTasks();
+        }
+      }
+      return;
+    }
+
+    if (retryBtn) {
+      const id = retryBtn.getAttribute("data-task");
+      retryBtn.disabled = true;
+      retryBtn.textContent = "匹配中…";
+      try {
+        const data = await api(`/api/tasks/${encodeURIComponent(id)}/subtitle`, { method: "POST" });
+        showToast(data.ok ? "字幕已配好" : (data.message || "未匹配到字幕"), data.ok ? "ok" : "err");
+      } catch (err) {
+        showToast(err.message || "字幕匹配失败", "err");
+      } finally {
+        await loadTasks();
+      }
+    }
+  });
+
+  on("#btn-clear-finished", "click", async () => {
+    if (!confirm("清空「已完成」的任务记录？\n\n点「确定」= 只清记录（文件保留）")) {
+      if (confirm("要连已完成任务的文件一起删除吗？\n\n点「确定」= 永久删除已整理的文件（含同名字幕），不可恢复")) {
+        try {
+          const res = await api("/api/tasks/clear", {
+            method: "POST",
+            body: JSON.stringify({ scope: "completed", delete_files: true }),
+          });
+          showToast(`已清理 ${res.removed} 条记录、文件 ${(res.removed_files || []).length} 项`, "ok");
+        } catch (err) {
+          showToast(err.message || "清理失败", "err");
+        } finally {
+          await loadTasks();
+        }
+      }
+      return;
+    }
     try {
-      const data = await api(`/api/tasks/${encodeURIComponent(id)}/subtitle`, { method: "POST" });
-      showToast(data.ok ? "字幕已配好" : (data.message || "未匹配到字幕"), data.ok ? "ok" : "err");
+      const res = await api("/api/tasks/clear", {
+        method: "POST",
+        body: JSON.stringify({ scope: "completed" }),
+      });
+      showToast(`已清理 ${res.removed} 条记录`, "ok");
     } catch (err) {
-      showToast(err.message || "字幕匹配失败", "err");
+      showToast(err.message || "清理失败", "err");
     } finally {
       await loadTasks();
     }

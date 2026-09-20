@@ -211,3 +211,10 @@ body { line-height: 1.5; }
 .empty .btn-paste-inline { margin-top: 4px; }
 .btn-paste-inline { font-size: 13px; }
 #dl-url[readonly] { opacity: .75; }
+
+/* ---------- 任务操作按钮（暂停/继续/删除） ---------- */
+.task-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.task-actions .btn { font-size: 12px; padding: 5px 10px; }
+.btn-task-delete { color: var(--danger); border-color: rgba(240, 113, 120, .35); }
+.btn-task-delete:hover { border-color: var(--danger); }
+.panel-head .hint { margin-right: auto; }

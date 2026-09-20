@@ -125,6 +125,12 @@ with httpx.Client(base_url=base, timeout=60.0) as client:
     h = client.get("/api/health").json()
     check("api_health", h.get("ok") is True and h.get("name") == "片坞", str(h))
     check("api_index", "片坞" in client.get("/").text, "index")
+    # 让后续检索自洽：只启用演示数据（离线可跑），其余源（含联网的内置索引）先关掉
+    _cfg0 = client.get("/api/config").json()
+    _providers0 = _cfg0["search_providers"]
+    for _p in _providers0:
+        _p["enabled"] = _p["type"] == "demo"
+    client.put("/api/config", json={"search_providers": _providers0})
     search = client.post("/api/search", json={"query": "沙丘2", "year": 2024}).json()
     check("api_search_demo", len(search.get("items") or []) >= 1, str(len(search.get("items") or [])))
     # 保存自定义索引配置

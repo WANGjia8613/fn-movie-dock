@@ -250,6 +250,40 @@ async def get_task(request: Request, task_id: str) -> TaskOut:
     return task.to_out()
 
 
+@router.post("/tasks/{task_id}/pause", response_model=TaskOut)
+async def pause_task(request: Request, task_id: str) -> TaskOut:
+    task = _mgr(request).get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return await _mgr(request).pause_task(task)
+
+
+@router.post("/tasks/{task_id}/resume", response_model=TaskOut)
+async def resume_task(request: Request, task_id: str) -> TaskOut:
+    task = _mgr(request).get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return await _mgr(request).resume_task(task)
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(request: Request, task_id: str, delete_files: bool = False) -> dict[str, Any]:
+    """从下载列表移除任务；delete_files=true 时连文件一起删（仅限配置目录内）。"""
+    result = await _mgr(request).remove_task(task_id, delete_files=delete_files)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("message") or "任务不存在")
+    return result
+
+
+@router.post("/tasks/clear")
+async def clear_tasks(request: Request, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = body or {}
+    scope = str(data.get("scope") or "completed")
+    if scope not in ("completed", "error", "all"):
+        raise HTTPException(status_code=400, detail="scope 只支持 completed / error / all")
+    return await _mgr(request).clear_tasks(scope=scope, delete_files=bool(data.get("delete_files")))
+
+
 @router.post("/tasks/{task_id}/subtitle", response_model=SubtitleFetchResponse)
 async def retry_task_subtitle(request: Request, task_id: str) -> SubtitleFetchResponse:
     task = _mgr(request).get(task_id)

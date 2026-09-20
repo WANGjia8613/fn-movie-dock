@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -111,6 +112,8 @@ class DownloadTask:
     http_dest: str = ""
     fetch_subtitle: bool = True
     incoming_dir: str = ""
+    # HTTP 直链续传重试次数（aria2 unpause 有已知 bug，靠重新添加绕开）
+    resume_attempts: int = 0
 
     def to_out(self) -> TaskOut:
         return TaskOut(
@@ -516,7 +519,11 @@ class DownloadManager:
                 speed = 0
             task.total_length = _human_size(total) if total else ""
             task.completed_length = _human_size(done) if done else ""
-            task.download_speed = f"{_human_size(speed)}/s" if speed else ""
+            # aria2 对已暂停的任务仍会回报上一刻的速度，这里强制清零，避免界面显示“暂停中 448KB/s”
+            if status == "paused":
+                task.download_speed = ""
+            else:
+                task.download_speed = f"{_human_size(speed)}/s" if speed else ""
             if total:
                 task.progress = round(done * 100 / total, 2)
             elif status == "complete":
@@ -546,9 +553,42 @@ class DownloadManager:
                 task.status = "complete"
                 await self._finish_task(task, paths)
             elif status == "error":
+                if await self._try_http_resume(task):
+                    continue
                 task.status = "error"
                 if not task.error:
                     task.error = "下载失败"
+
+    def _can_http_resume(self, task: DownloadTask) -> bool:
+        """aria2 对 HTTP 直链的 unpause 会变成 “No URI available.” 错误 —— 可重新添加续传。"""
+        if task.resume_attempts >= 2:
+            return False
+        if not task.url.lower().startswith(("http://", "https://")):
+            return False
+        return "no uri" in (task.error or "").lower()
+
+    async def _try_http_resume(self, task: DownloadTask, force: bool = False) -> bool:
+        """重新添加同一链接（continue=true）从断点继续；成功返回 True。
+
+        force=True：用户点“继续”时直接用，不等 aria2 报错。
+        """
+        if not force and not self._can_http_resume(task):
+            return False
+        task.resume_attempts += 1
+        try:
+            options = self._aria2_options(task)
+            options["continue"] = "true"
+            new_gid = await self.aria2.add_uri([task.url], options)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[片坞] HTTP 续传失败：{exc}")
+            return False
+        task.gid = str(new_gid)
+        task.status = "active"
+        task.error = ""
+        task.updated_at = _now()
+        self._dirty = True
+        print(f"[片坞] HTTP 任务自动续传（第 {task.resume_attempts} 次，新 gid={task.gid}）")
+        return True
 
     def _collect_output_files(self, task: DownloadTask, file_paths: list[str]) -> list[Path]:
         """优先用 aria2 报的准确文件列表；仅在缺失时回退到任务自己的目录扫描。
@@ -670,6 +710,157 @@ class DownloadManager:
             task.subtitle_status = "failed"
             task.subtitle_path = ""
             task.subtitle_note = result.message
+
+    async def pause_task(self, task: DownloadTask) -> TaskOut:
+        """暂停（仅 aria2 任务；HTTP 直链下载不支持）。"""
+        if task.engine != "aria2" or not task.gid:
+            task.error = "该任务不支持暂停（仅 aria2 的磁力/种子任务可暂停）"
+            return task.to_out()
+        try:
+            await self.aria2.call("aria2.pause", [task.gid])
+            task.status = "paused"
+            task.download_speed = ""
+            task.error = ""
+            task.updated_at = _now()
+            self._dirty = True
+            self._persist(force=True)
+        except Exception as exc:  # noqa: BLE001
+            task.error = _friendly_aria2_error(str(exc))
+        return task.to_out()
+
+    async def resume_task(self, task: DownloadTask) -> TaskOut:
+        """继续下载。
+
+        - 磁力/种子：用 aria2.unpause（正常）
+        - HTTP 直链：aria2 的 unpause 有已知 bug（会报 “No URI available.” 并变 error，
+          而且要等重试耗尽才报），因此 **直接重新添加同一链接 + continue=true 断点续传**。
+        """
+        if task.engine != "aria2" or not task.gid:
+            task.error = "该任务不支持续传（仅 aria2 的磁力/种子任务可续传）"
+            return task.to_out()
+
+        if task.url.lower().startswith(("http://", "https://")):
+            if await self._try_http_resume(task, force=True):
+                self._persist(force=True)
+                return task.to_out()
+
+        try:
+            await self.aria2.call("aria2.unpause", [task.gid])
+            task.status = "active"
+            task.error = ""
+            task.updated_at = _now()
+            self._dirty = True
+            self._persist(force=True)
+            return task.to_out()
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            task.error = _friendly_aria2_error(message)
+            if "no uri" in message.lower() and await self._try_http_resume(task, force=True):
+                return task.to_out()
+            return task.to_out()
+
+    # ---------- 删除 ----------
+    def _allowed_roots(self) -> list[Path]:
+        """允许删除的根目录（防止误删配置目录以外的文件）。"""
+        roots: list[Path] = []
+        for raw in (self.cfg.download_root(), self.cfg.library_root()):
+            try:
+                roots.append(Path(raw).resolve())
+            except OSError:
+                continue
+        return roots
+
+    def _inside_roots(self, path: Path) -> bool:
+        try:
+            target = path.resolve()
+        except OSError:
+            return False
+        for root in self._allowed_roots():
+            if target == root or root in target.parents:
+                return True
+        return False
+
+    def _delete_task_files(self, task: DownloadTask) -> list[str]:
+        """删除任务产生的文件（仅限下载目录/资料库目录内）。返回已删路径。"""
+        removed: list[str] = []
+        targets: list[Path] = []
+
+        if task.incoming_dir and self.cfg.downloader.per_task_dir:
+            targets.append(Path(task.incoming_dir))
+        if task.organized_path:
+            targets.append(Path(task.organized_path))
+        if task.subtitle_path:
+            targets.append(Path(task.subtitle_path))
+
+        for path in targets:
+            if not self._inside_roots(path):
+                continue
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed.append(str(path))
+                    continue
+                if not path.exists():
+                    continue
+                if path.suffix.lower() in MEDIA_EXTS:
+                    for sub in self._sibling_subtitles(path):
+                        try:
+                            sub.unlink(missing_ok=True)
+                            removed.append(str(sub))
+                        except OSError:
+                            pass
+                path.unlink(missing_ok=True)
+                removed.append(str(path))
+            except OSError:
+                continue
+        return removed
+
+    @staticmethod
+    def _sibling_subtitles(video: Path) -> list[Path]:
+        sub_exts = (".ass", ".srt", ".ssa", ".sup", ".sub", ".vtt")
+        out: list[Path] = []
+        try:
+            for cand in video.parent.iterdir():
+                if cand.suffix.lower() not in sub_exts:
+                    continue
+                if cand.stem == video.stem or cand.stem.startswith(f"{video.stem}."):
+                    out.append(cand)
+        except OSError:
+            pass
+        return out
+
+    async def remove_task(self, task_id: str, delete_files: bool = False) -> dict[str, Any]:
+        """从列表移除任务；delete_files=True 时同时删除下载文件/字幕（仅限配置目录内）。"""
+        task = self.tasks.get(task_id)
+        if task is None:
+            return {"ok": False, "message": "任务不存在", "removed_files": []}
+
+        if task.gid:
+            for method in ("aria2.remove", "aria2.removeDownloadResult"):
+                try:
+                    await self.aria2.call(method, [task.gid])
+                except Exception:  # noqa: BLE001
+                    pass
+
+        removed = self._delete_task_files(task) if delete_files else []
+        self.tasks.pop(task_id, None)
+        self._dirty = True
+        self._persist(force=True)
+        return {"ok": True, "task_id": task_id, "removed_files": removed}
+
+    async def clear_tasks(self, scope: str = "completed", delete_files: bool = False) -> dict[str, Any]:
+        """批量清理：scope = completed / error / all。"""
+        if scope == "completed":
+            targets = [t for t in self.tasks.values() if t.status == "complete"]
+        elif scope == "error":
+            targets = [t for t in self.tasks.values() if t.status == "error"]
+        else:
+            targets = list(self.tasks.values())
+        removed_files: list[str] = []
+        for task in targets:
+            result = await self.remove_task(task.task_id, delete_files=delete_files)
+            removed_files.extend(result.get("removed_files") or [])
+        return {"ok": True, "removed": len(targets), "removed_files": removed_files}
 
     async def retry_subtitle(self, task: DownloadTask) -> TaskOut:
         """手动重试字幕匹配（换关键词后再试）。"""

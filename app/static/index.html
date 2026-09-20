@@ -73,6 +73,7 @@
         <div class="panel-head">
           <h2>下载任务</h2>
           <span id="task-live" class="hint"></span>
+          <button id="btn-clear-finished" class="btn ghost" type="button" title="清空已完成的任务记录">清空已完成</button>
           <button id="btn-refresh-tasks" class="btn ghost" type="button">刷新</button>
         </div>        <div id="tasks" class="tasks">
           <div class="empty">暂无任务。检索后选择一条片源开始下载。</div>
@@ -160,7 +161,8 @@
 
         <h4>检索源</h4>
         <div id="cfg-providers" class="providers"></div>
-        <p class="hint">内置索引源的源可选：tpb（海盗湾）、yts、dmhy（动漫花园），逗号分隔。自定义索引需填接口 URL。</p>
+        <p class="hint">内置索引源的源可选：tpb（海盗湾）、yts、dmhy（动漫花园），逗号分隔。自定义索引需填接口 URL。<br/>
+          「演示数据」是<b>开发调试用</b>的假数据源（返回假链接，不能真下载），正常使用请保持关闭。</p>
 
         <h4>网络（代理）</h4>
         <p class="hint">境内直连不稳的索引源/字幕站，填本地代理即可解锁。例（Clash 混合端口）<code>http://127.0.0.1:7890</code></p>
