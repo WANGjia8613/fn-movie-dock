@@ -213,7 +213,7 @@ function renderResults(items, warnings, providers) {
 
 function guessYearFromTitle(title) {
   const m = String(title || "").match(/(19|20)\d{2}/);
-  return m ? Number(m[0]) : ($("#year").value ? Number($("#year").value") : null);
+  return m ? Number(m[0]) : ($("#year").value ? Number($("#year").value) : null);
 }
 
 function openDownloadModal(payload) {

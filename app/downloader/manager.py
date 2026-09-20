@@ -283,7 +283,7 @@ class DownloadManager:
         if path.exists():
             task.completed_length = task.total_length or _human_size(path.stat().st_size)
         task.updated_at = _now()
-        self._organize_if_needed(task, [path] if path.exists() else [])
+        await self._organize_if_needed(task, [path] if path.exists() else [])
 
     def _on_http_progress(self, task: DownloadTask, done: int, total: int, speed: float) -> None:
         task.completed_length = _human_size(done)
@@ -356,12 +356,26 @@ class DownloadManager:
                 if not paths:
                     paths = [p for p in self._scan_incoming_for_task(task)]
                 task.saved_path = str(paths[0].parent) if paths else str(self.cfg.incoming_dir())
-                self._organize_if_needed(task, paths)
+                await self._organize_if_needed(task, paths)
                 task.status = "complete"
             elif status == "error":
                 task.status = "error"
                 if not task.error:
                     task.error = "下载失败"
+
+    @staticmethod
+    def _safe_mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _safe_size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
 
     def _scan_incoming_for_task(self, task: DownloadTask) -> list[Path]:
         """尽量只返回与当前任务相关的文件，避免并发任务误整理。"""
@@ -370,9 +384,12 @@ class DownloadManager:
             return []
         all_files: list[Path] = []
         for p in root.rglob("*"):
-            if p.is_file() and not p.name.endswith(".aria2"):
-                all_files.append(p)
-        all_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            try:
+                if p.is_file() and not p.name.endswith(".aria2"):
+                    all_files.append(p)
+            except OSError:
+                continue
+        all_files.sort(key=self._safe_mtime, reverse=True)
 
         keywords = [w for w in (task.quality, str(task.year) if task.year else "", task.title) if w]
         matched: list[Path] = []
@@ -382,7 +399,7 @@ class DownloadManager:
                 matched.append(p)
         return matched or all_files[:5]
 
-    def _organize_if_needed(self, task: DownloadTask, paths: list[Path]) -> None:
+    async def _organize_if_needed(self, task: DownloadTask, paths: list[Path]) -> None:
         opts = task.organize_opts or {}
         enabled = bool(opts.get("enabled", self.cfg.organize.enabled))
         media_ext = {
@@ -393,9 +410,12 @@ class DownloadManager:
             return
         primary = None
         for p in paths:
-            if p.is_file() and p.suffix.lower() in media_ext:
-                primary = p
-                break
+            try:
+                if p.is_file() and p.suffix.lower() in media_ext:
+                    primary = p
+                    break
+            except OSError:
+                continue
         if primary is None:
             files = [p for p in paths if p.is_file()]
             if not files:
@@ -403,10 +423,12 @@ class DownloadManager:
             if len(files) == 1:
                 primary = files[0]
             else:
-                primary = max(files, key=lambda p: p.stat().st_size if p.exists() else 0)
+                primary = max(files, key=self._safe_size)
 
         try:
-            final = self.organizer.organize_file(
+            # shutil.move/copy 是阻塞 IO，放到线程池避免卡住事件循环
+            final = await asyncio.to_thread(
+                self.organizer.organize_file,
                 primary,
                 title=task.title,
                 year=task.year,

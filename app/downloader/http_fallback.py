@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote, urlparse
 
+import aiofiles
 import httpx
 
 ProgressCb = Callable[[int, int, float], None]
@@ -42,7 +44,6 @@ async def download_http_to(
     total = 0
     last = 0.0
     last_t = 0.0
-    import time
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=True) as client:
         async with client.stream("GET", url) as resp:
@@ -51,9 +52,9 @@ async def download_http_to(
             if cl and cl.isdigit():
                 total = int(cl)
             start = time.time()
-            with dest.open("wb") as f:
+            async with aiofiles.open(dest, "wb") as f:
                 async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
-                    f.write(chunk)
+                    await f.write(chunk)
                     done += len(chunk)
                     now = time.time()
                     elapsed = now - start
