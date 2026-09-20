@@ -23,10 +23,12 @@ jobs:
         id: meta
         run: |
           TAG="${GITHUB_REF_NAME:-manual}"
+          VERSION="${TAG#v}"          # 去掉前缀 v，方便用户写 :0.4.2
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "镜像：$IMAGE:$TAG"
+          echo "镜像：$IMAGE:$TAG / $IMAGE:$VERSION / $IMAGE:latest"
 
       - name: 单测（构建前先跑一遍逻辑层）
         run: |
@@ -52,6 +54,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -108,7 +111,8 @@ jobs:
             ## 方式一：直接拉镜像（推荐）
 
             ```bash
-            docker pull ghcr.io/wangjia8613/fn-movie-dock:${{ github.ref_name }}
+            docker pull ghcr.io/wangjia8613/fn-movie-dock:${{ steps.meta.outputs.version }}
+            # 也可用 :latest 或 :${{ steps.meta.outputs.tag }}
             ```
 
             或下载本页的 `docker-compose.release.yml`，改好路径后：

@@ -9,7 +9,7 @@
 
 services:
   movie-dock:
-    image: ghcr.io/wangjia8613/fn-movie-dock:latest   # 想固定版本就写 :0.4.2
+    image: ghcr.io/wangjia8613/fn-movie-dock:latest   # 也可固定版本：:0.4.2（同 :v0.4.2 是同一个镜像）
     container_name: movie-dock
     restart: unless-stopped
     # 用哪个 uid 跑容器：要能写你的电影库目录。飞牛上常见可用 1002（应用账号 claw）
