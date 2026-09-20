@@ -1,7 +1,9 @@
 """字幕压缩包解压 + 文本编码规整。
 
 SubHD 的下载包可能是 zip，也可能是 rar（踩过坑：rar 用 zipfile 打开会抛
-BadZipFile），所以这里按 zip → 7z/7zz → bsdtar → unrar → unar 依次兜底。
+BadZipFile），所以这里按 zip → 7z → bsdtar → unrar → unar 依次兜底。
+工具探测统一走 app.runtime（随包 vendor 目录 → PATH → 常见安装路径，
+Windows 上会自动找 C:\\Program Files\\7-Zip\\7z.exe 或随包 7z.exe）。
 """
 from __future__ import annotations
 
@@ -10,26 +12,13 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-SUB_EXTS = (".ass", ".srt", ".ssa", ".sup", ".sub", ".idx", ".vtt")
+from ..runtime import find_tool
 
-# 常见工具绝对路径兜底（容器/飞牛上 where 不一定在 PATH）
-_TOOL_HINTS = {
-    "7z": ["/usr/bin/7z", "/usr/local/bin/7z", "/usr/trim/bin/7z"],
-    "7zz": ["/usr/bin/7zz", "/usr/trim/bin/7zz", "/usr/local/bin/7zz"],
-    "bsdtar": ["/usr/bin/bsdtar"],
-    "unrar": ["/usr/bin/unrar", "/usr/local/bin/unrar"],
-    "unar": ["/usr/bin/unar", "/usr/local/bin/unar"],
-}
+SUB_EXTS = (".ass", ".srt", ".ssa", ".sup", ".sub", ".idx", ".vtt")
 
 
 def _tool_path(tool: str) -> str | None:
-    found = shutil.which(tool)
-    if found:
-        return found
-    for cand in _TOOL_HINTS.get(tool, []):
-        if Path(cand).exists():
-            return cand
-    return None
+    return find_tool(tool)
 
 
 def _fix_zip_name(info: zipfile.ZipInfo) -> str:
@@ -65,13 +54,13 @@ def _extract_zip(archive: Path, out_dir: Path) -> bool:
 
 
 def _run_tool(tool: str, archive: Path, out_dir: Path) -> tuple[bool, str]:
-    name = Path(tool).name
+    name = Path(tool).name.lower().removesuffix(".exe")
     if name in ("7z", "7zz", "7za"):
         cmd = [tool, "x", "-y", f"-o{out_dir}", str(archive)]
-    elif name == "bsdtar":
+    elif name in ("bsdtar", "tar"):
         cmd = [tool, "-xf", str(archive), "-C", str(out_dir)]
-    elif name == "unrar":
-        cmd = [tool, "x", "-y", str(archive), str(out_dir) + "/"]
+    elif name in ("unrar", "unrar-free"):
+        cmd = [tool, "x", "-y", str(archive), str(out_dir) + ("/" if not str(out_dir).endswith("/") else "")]
     elif name == "unar":
         cmd = [tool, "-o", str(out_dir), str(archive)]
     else:

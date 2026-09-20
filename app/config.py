@@ -9,6 +9,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from . import runtime as _runtime
+
 
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
@@ -64,6 +66,11 @@ class OrganizeConfig(BaseModel):
 class Aria2Config(BaseModel):
     rpc_url: str = "http://127.0.0.1:6800/jsonrpc"
     rpc_secret: str = ""
+    # 桌面模式：应用自己拉起 aria2（Docker 模式由 entrypoint 拉起，保持 False）
+    auto_start: bool = False
+    # 指定 aria2c 可执行文件（留空则自动探测：随包 vendor → PATH → 常见安装路径）
+    binary: str = ""
+    port: int = 6800
 
 
 class DownloaderConfig(BaseModel):
@@ -124,6 +131,7 @@ class AppConfig(BaseModel):
             (self.paths.state_dir or "").strip(),
             str(self.download_root().parent / "data"),
             str(Path(__file__).resolve().parent.parent / "data"),
+            str(_runtime.default_data_dir()),
         ]
         for raw in candidates:
             if not raw:
@@ -154,7 +162,8 @@ def _config_file_path() -> Path:
     docker_path = Path("/config/config.yaml")
     if docker_path.parent.exists():
         return docker_path
-    return Path(__file__).resolve().parent.parent / "config.yaml"
+    # 桌面模式（Windows/macOS/Linux 本地）：用系统标准配置目录
+    return _runtime.default_config_path()
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -216,7 +225,13 @@ _DEFAULT_DATA: dict[str, Any] = {
     },
     "downloader": {
         "engine": "aria2",
-        "aria2": {"rpc_url": "http://127.0.0.1:6800/jsonrpc", "rpc_secret": ""},
+        "aria2": {
+            "rpc_url": "http://127.0.0.1:6800/jsonrpc",
+            "rpc_secret": "",
+            "auto_start": False,
+            "binary": "",
+            "port": 6800,
+        },
         "max_concurrent": 3,
         "category_dir": "incoming",
         "per_task_dir": True,

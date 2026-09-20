@@ -24,3 +24,10 @@ Thumbs.db
 *.swp
 .env
 .env.*
+
+# 桌面构建产物与随包二进制（CI 现拉）
+vendor/
+build/
+dist/
+*.zip
+SHA256SUMS.txt

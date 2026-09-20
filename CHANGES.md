@@ -86,3 +86,34 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
 - 字幕默认只挑 1 个文件落盘（简繁/多轨不分别落地）
 - `/api/subtitle/candidates` 只是列出条目，未做"手动指定 sid 下载"的 UI
 - 未做访问鉴权（沿用上游行为）：**不要把这个 8090 直接暴露公网**
+
+---
+
+## 0.2.0（Windows 本地版）
+
+目标：**完全不依赖 Linux/NAS**，在 Windows 上本地完成「搜索 → 下载 → 整理 → 配字幕」。
+
+### 新增：跨平台运行时层 `app/runtime.py`
+- 外部工具探测统一化：**随包 vendor → PATH → 常见安装路径**（Windows 自动找 `C:\Program Files\7-Zip\7z.exe`，兼容 `7z/7zz/7za`、`unrar/UnRAR`、`bsdtar`、`unar`）
+- 配置/状态目录按平台落位：Windows `%APPDATA%\MovieDock`，Linux `~/.config/movie-dock`，可用 `MOVIE_DOCK_HOME` 覆盖
+- aria2 进程托管：统一参数（`seed-time=0` 不做种、RPC 仅回环、DHT/LPD、tracker），拉起后轮询 RPC 就绪
+- UTF-8 控制台、环境自检信息、浏览器兜底
+
+### 新增：桌面启动器 `app/desktop/`
+- `MovieDock.exe`：启动即用 —— 准备配置 → 拉起 aria2c → 起本地服务（127.0.0.1，随机避让端口）→ 打开 **WebView2 原生窗口**；没有 WebView2/pywebview 时自动退回默认浏览器
+- `MovieDockCLI.exe`：`--headless`（只跑服务）、`--selftest`（启动→自检→退出，CI 用）、`--browser`、`--no-tray`、`--download-dir`
+- 系统托盘：打开界面 / 打开下载目录 / 复制地址 / 退出
+- 单实例：已在运行则直接打开已有实例，不重复起进程
+- 退出清理 aria2 子进程；`aria2.auto_start` 配置项区分桌面模式（True）与 Docker 模式（False，由 entrypoint 拉起）
+
+### 新增：打包与 CI
+- `packaging/moviedock.spec`：PyInstaller onedir，一次产出 GUI + CLI 两个 exe，附带 `app/static`、`config.example.yaml`、`vendor/win64/*`，含自绘图标 `packaging/moviedock.ico`
+- `scripts/fetch_vendor.py`：拉取官方 `aria2c.exe`（1.37.0）与 `7z.exe/7z.dll`（7-Zip 25.00，**含 rar 支持**）到 `vendor/win64/`
+- `scripts/ci_download_test.py`：端到端链路测试（本地 HTTP 文件 → aria2 下载 → 整理 → 校验字节/命名），Windows 与 Linux 都能跑
+- `scripts/desktop_checks.py`：29 项桌面/跨平台层自检
+- `.github/workflows/ci.yml`（ubuntu）与 `.github/workflows/windows-build.yml`（windows-latest：单测 → 自检 → 端到端下载 → PyInstaller 打包 → exe 冒烟 → 产物/Release）
+
+### 改动
+- `subtitle/extract.py` 的工具探测改走 `runtime.find_tool`（Windows 上自动用随包 `7z.exe`，支持 rar）
+- `config.py`：配置文件路径按平台落位；`downloader.aria2` 新增 `auto_start` / `binary` / `port`
+- Docker 行为不变（`auto_start=False`，保持由 entrypoint 拉起 aria2）

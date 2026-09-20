@@ -1,0 +1,7 @@
+# 桌面模式（Windows/macOS/Linux 本地运行）额外依赖；Docker 镜像不需要装
+pywebview>=5.0
+pystray>=0.19.5
+Pillow>=10.0.0
+# pywebview 在 Windows 上靠 pythonnet 走 WebView2；装了它才有原生窗口，缺了会自动退回浏览器
+pythonnet>=3.0.3; sys_platform == "win32"
+clr-loader>=0.2.6; sys_platform == "win32"
