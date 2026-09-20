@@ -18,6 +18,10 @@ sys.path.insert(0, str(ROOT))
 TMP = Path(tempfile.mkdtemp(prefix="moviedock-unit-"))
 os.environ["MOVIE_DOCK_CONFIG"] = str(TMP / "config.yaml")
 
+from app.runtime import ensure_utf8
+
+ensure_utf8()
+
 from app.config import OrganizeConfig, ProviderConfig, load_config, save_app_config  # noqa: E402
 from app.downloader.manager import DownloadManager, DownloadTask  # noqa: E402
 from app.models import SourceItem  # noqa: E402

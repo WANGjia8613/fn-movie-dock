@@ -16,6 +16,13 @@ os.chdir(ROOT)
 
 # --- 单元级：配置深拷贝 / 解析 / 清晰度 / 整理 ---
 from app.config import _DEFAULT_DATA, load_config, save_app_config
+
+try:  # Windows 控制台编码
+    from app.runtime import ensure_utf8
+
+    ensure_utf8()
+except Exception:
+    pass
 from app.llm import detect_quality, parse_llm_sources
 from app.organizer import Organizer, apply_template, parse_title_year
 from app.config import OrganizeConfig

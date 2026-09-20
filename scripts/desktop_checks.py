@@ -23,6 +23,10 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 tmp_root = Path(tempfile.mkdtemp(prefix="moviedock-desktop-"))
 os.environ["MOVIE_DOCK_HOME"] = str(tmp_root / "home")
 
+from app.runtime import ensure_utf8
+
+ensure_utf8()
+
 from app import runtime  # noqa: E402
 from app.config import load_config  # noqa: E402
 from app.desktop import launcher  # noqa: E402

@@ -13,6 +13,10 @@ jobs:
   build-win64:
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      # 中文输出在 Windows 控制台会撞 cp936/cp1252，统一 UTF-8
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
 
