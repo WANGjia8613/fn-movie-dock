@@ -25,6 +25,25 @@ MEDIA_EXTS = {
 }
 
 
+def _title_from_url(url: str) -> tuple[str, Optional[int]]:
+    """从链接推断片名/年份：磁力优先看 dn= 参数，其余交给 parse_title_year。"""
+    from urllib.parse import parse_qs, unquote
+
+    raw = (url or "").strip()
+    if raw.lower().startswith("magnet:") and "?" in raw:
+        try:
+            qs = parse_qs(raw.split("?", 1)[1])
+        except ValueError:
+            qs = {}
+        dn = (qs.get("dn") or [""])[0]
+        if dn:
+            name = unquote(dn).replace("+", " ")
+            title, year = parse_title_year(name)
+            if title:
+                return title, year
+    return parse_title_year(raw)
+
+
 def _friendly_aria2_error(raw: str) -> str:
     """把 aria2 的英文错误改成能看懂的中文提示（保留原文便于排查）。"""
     text = (raw or "").strip()
@@ -295,7 +314,7 @@ class DownloadManager:
     ) -> DownloadTask:
         url = (url or "").strip()
         if not title:
-            parsed_title, parsed_year = parse_title_year(url)
+            parsed_title, parsed_year = _title_from_url(url)
             title = parsed_title or "未命名任务"
             if year is None:
                 year = parsed_year

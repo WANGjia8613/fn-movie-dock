@@ -9,6 +9,12 @@ from ..config import OrganizeConfig
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WS = re.compile(r"\s+")
+# 压制/画质/音轨类标记：出现位置之后的内容基本是发布信息，不是片名
+_RELEASE_TOKEN_PATTERN = (
+    r"(?:2160p|1080p|720p|480p|4k|uhd|bluray|blu-?ray|bdremux|remux|web-?dl|webdl|webrip|hdtv|hdrip|"
+    r"brrip|dvdrip|x264|x265|h264|h265|hevc|avc|av1|10bit|8bit|aac|ac3|ddp|dd5|dts(?:-hd)?|truehd|"
+    r"atmos|hdr10\+?|hdr|dovi|repack|proper|internal|multi|dual|remastered|imax|extended)"
+)
 
 # 剧集集号识别：S01E02 / s1e2 / 1x02 / 第2集 / EP02 / E02
 _EPISODE_PATTERNS = [
@@ -45,12 +51,18 @@ def parse_title_year(query: str) -> tuple[str, Optional[int]]:
     if m:
         year = int(m.group(1))
         text = (text[: m.start()] + text[m.end() :]).strip()
-    text = re.sub(
-        r"\b(2160p|1080p|720p|480p|4k|uhd|bluray|blu-ray|web-?dl|webrip|hdtv|x264|x265|hevc|hdr|remux)\b",
-        "",
-        text,
-        flags=re.I,
-    )
+    # 发布名常用点号分词：Spider-Man.No.Way.Home -> Spider-Man No Way Home
+    text = re.sub(r"(?<=[A-Za-z0-9])\.(?=[A-Za-z0-9])", " ", text)
+    # 遇到第一个压制/画质标记就截断 —— 比逐个删除更能得到干净的片名
+    # （例：WALL-E (2008) 1080p BrRip x264 - 1.20GB - YIFY → WALL-E）
+    hit = re.search(r"\b" + _RELEASE_TOKEN_PATTERN + r"\b", text, re.I)
+    if hit and hit.start() > 0:
+        text = text[: hit.start()]
+    # 去掉 “1.20GB” 这类体积标记（磁力 dn= 里很常见）
+    text = re.sub(r"\d+(?:\.\d+)?\s?(?:GB|MB|KB)\b", "", text, flags=re.I)
+    # 只收拾“分隔用”的短横（两侧带空格 / 末尾），别动 WALL-E、Spider-Man 这类词内连字符
+    text = re.sub(r"(?:\s+-\s*)+$", "", text)
+    text = re.sub(r"(?:\s+-\s*)+", " ", text)
     text = _WS.sub(" ", text).strip(" -_·.")
     return sanitize_name(text), year
 

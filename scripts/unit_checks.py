@@ -287,6 +287,16 @@ with tempfile.TemporaryDirectory() as td:
           all(p.suffix.lower() != ".torrent" for p in mgr3._collect_output_files(t2, [str(meta_torrent)])),
           str([p.name for p in mgr3._collect_output_files(t2, [str(meta_torrent)])]))
 
+# ---------- 10) 磁力 dn= 推断片名（粘贴下载路径） ----------
+from app.downloader.manager import _title_from_url  # noqa: E402
+
+magnet = ("magnet:?xt=urn:btih:6687A51BB38802620E13542D9C50235039F939D1"
+          "&dn=WALL-E+%282008%29+1080p+BrRip+x264+-+1.20GB+-+YIFY")
+title, year = _title_from_url(magnet)
+check("magnet_dn_title", title == "WALL-E" and year == 2008, f"{title}/{year}")
+title2, year2 = _title_from_url("https://example.com/Some.Movie.2019.1080p.mkv")
+check("url_fallback_title", bool(title2), f"{title2}/{year2}")
+
 # ---------- 输出 ----------
 print("=" * 68)
 failed = 0

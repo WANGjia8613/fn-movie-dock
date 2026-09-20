@@ -47,6 +47,7 @@
             </label>
             <button id="btn-search" class="btn primary" type="submit">搜索</button>
             <button id="btn-best" class="btn best" type="button" title="按评分挑选最合适的一条（清晰度/做种/特性）">一键最优</button>
+            <button id="btn-paste" class="btn" type="button" title="直接粘贴磁力链接 / 种子地址 / HTTP 直链下载">粘贴磁力/直链</button>
           </div>
           <div class="organize-row">
             <label class="check">
@@ -189,7 +190,7 @@
         </label>
         <label class="field">
           <span>下载链接（磁力 / 种子 / 直链）</span>
-          <textarea id="dl-url" rows="3" readonly></textarea>
+          <textarea id="dl-url" rows="3" placeholder="magnet:?xt=urn:btih:... 或 https://....torrent"></textarea>
         </label>
         <label class="check">
           <input id="dl-organize" type="checkbox" checked />

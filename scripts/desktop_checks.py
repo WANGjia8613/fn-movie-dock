@@ -152,6 +152,14 @@ check("wait_health_dead_port_none", launcher.wait_health(1, timeout=1.0) is None
 _st = launcher.ServerThread("127.0.0.1", 1)
 check("server_thread_captures_error", hasattr(_st, "error") and _st.error is None, "attr ok")
 
+# ---------- 8) 前端入口可见性（修“双击空白处点不到”） ----------
+html_text = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+js_text = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+check("ui_paste_button", 'id="btn-paste"' in html_text, "btn-paste")
+check("ui_paste_handler", "openPasteModal" in js_text and "parseMagnetName" in js_text, "handlers")
+check("ui_url_editable_when_manual", 'id="dl-url" rows="3" placeholder' in html_text, "editable textarea")
+check("ui_empty_state_has_entry", "btn-paste-inline" in js_text and "还没检索" in js_text, "empty-state entry")
+
 print("=" * 68)
 failed = 0
 for name, status, detail in results:

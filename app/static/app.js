@@ -237,7 +237,12 @@ function renderResults(items, warnings, providers, bestId) {
   meta.textContent = `共 ${items.length} 条候选（按评分排序）· 来源：${(providers || []).join("、") || "无"}`;
 
   if (!items.length) {
-    box.innerHTML = `<div class="empty">没有检索到候选。可启用「qBittorrent 搜索」（复用本机 qB 的搜索插件）、配置自定义索引 API，也可以在下载弹窗中手动粘贴磁力链接。</div>`;
+    box.innerHTML = `<div class="empty">
+      没有检索到候选。<br/>
+      ① 直接用「粘贴磁力/直链」下载（推荐，不依赖检索源）；
+      ② 或在「设置 → 检索源」里配置 qBittorrent / 自定义索引后点「搜索」。
+      <div style="margin-top:10px"><button class="btn primary btn-paste-inline" type="button">粘贴磁力/直链</button></div>
+    </div>`;
     return;
   }
 
@@ -279,6 +284,52 @@ function guessYearFromTitle(title) {
   return m ? Number(m[0]) : ($("#year").value ? Number($("#year").value) : null);
 }
 
+/** 从磁力 dn= 里提取片名/年份（用于自动填“用于整理的片名”） */
+function parseMagnetName(url) {
+  if (!/^magnet:/i.test(url || "")) return null;
+  const m = String(url).match(/[?&]dn=([^&]+)/i);
+  if (!m) return null;
+  let name = "";
+  try { name = decodeURIComponent(m[1].replace(/\+/g, " ")); } catch { name = m[1].replace(/\+/g, " "); }
+  name = name.replace(/\.(mkv|mp4|avi|ts|m2ts)$/i, "");
+  const year = (name.match(/(19|20)\d{2}/) || [null])[0];
+  const clean = name
+    .replace(/\b(bluray|blu-ray|bdremux|remux|web-dl|webdl|webrip|hdtv|hdrip|brrip|dvdrip)\b/gi, " ")
+    .replace(/\b(2160p|1080p|720p|480p|4k|uhd|hdr10\+|hdr10|hdr|dovi|dv|10bit|8bit)\b/gi, " ")
+    .replace(/\b(x264|x265|h264|h265|hevc|avc|av1|aac|ac3|dts-hd|dts|truehd|atmos|ddp)\b/gi, " ")
+    .replace(/\b(repack|proper|internal|multi|dual|remastered|criterion|imax)\b/gi, " ")
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    .replace(/[-_.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { title: clean || null, year: year ? Number(year) : null };
+}
+
+/** 打开“粘贴磁力/直链”弹框（链接为空、可编辑、自动识别磁力里的片名） */
+function openPasteModal(prefill) {
+  openDownloadModal({
+    title: (prefill && prefill.title) || $("#query").value.trim() || "",
+    quality: (prefill && prefill.quality) || $("#quality").value || "",
+    url: (prefill && prefill.url) || "",
+    source: "手动粘贴",
+  });
+  const el = $("#dl-url");
+  el.readOnly = false;
+  el.focus();
+  if (el.value) autoFillFromUrl();
+}
+
+/** 粘完磁力自动补片名/年份（用户已填的不覆盖） */
+function autoFillFromUrl() {
+  const url = $("#dl-url").value.trim();
+  const parsed = parseMagnetName(url);
+  if (!parsed) return;
+  const titleEl = $("#dl-title");
+  const yearEl = $("#dl-year");
+  if (!titleEl.value.trim() && parsed.title) titleEl.value = parsed.title;
+  if (!yearEl.value && parsed.year) yearEl.value = parsed.year;
+}
+
 function openDownloadModal(payload) {
   state.pendingDownload = payload;
   $("#dl-summary").innerHTML = `
@@ -291,7 +342,10 @@ function openDownloadModal(payload) {
   $("#dl-title").value = rawTitle;
   $("#dl-year").value = guessYearFromTitle(payload.title) || "";
   $("#dl-quality").value = payload.quality || "";
-  $("#dl-url").value = payload.url || "";
+  const urlEl = $("#dl-url");
+  urlEl.value = payload.url || "";
+  // 候选来的链接只读；手工粘贴时可编辑
+  urlEl.readOnly = Boolean(payload.url);
   $("#dl-organize").checked = $("#org-enabled").checked;
   $("#dl-subtitle").checked = $("#sub-enabled").checked;
   $("#modal-download").hidden = false;
@@ -564,6 +618,8 @@ function bindEvents() {
   };
   on("#search-form", "submit", doSearch);
   on("#btn-best", "click", pickBest);
+  on("#btn-paste", "click", () => openPasteModal());
+  on("#dl-url", "input", autoFillFromUrl);
   on("#btn-settings", "click", () => { $("#modal-settings").hidden = false; });
   $$("[data-close-settings]").forEach((b) => b.addEventListener("click", () => { $("#modal-settings").hidden = true; }));
   $$("[data-close-download]").forEach((b) => b.addEventListener("click", () => { $("#modal-download").hidden = true; }));
@@ -602,6 +658,8 @@ function bindEvents() {
   });
 
   on("#results", "click", (e) => {
+    const pasteBtn = e.target.closest(".btn-paste-inline");
+    if (pasteBtn) { openPasteModal(); return; }
     const btn = e.target.closest(".btn-pick");
     if (!btn) return;
     openDownloadModal({
@@ -632,6 +690,16 @@ async function init() {
   } catch (err) {
     console.error("[片坞] 事件绑定失败:", err);
     showToast("界面初始化异常：" + (err.message || err), "err");
+  }
+  // 未搜索前的占位（明确给出入口，不再靠“双击空白处”）
+  const box = $("#results");
+  if (box && !box.innerHTML.trim()) {
+    box.innerHTML = `<div class="empty">
+      <b>还没检索</b><br/>
+      ① 点下方按钮直接粘贴磁力/直链下载（不需要任何检索源）<br/>
+      ② 或在「设置 → 检索源」配置后搜索片名
+      <div style="margin-top:10px"><button class="btn primary btn-paste-inline" type="button">粘贴磁力/直链</button></div>
+    </div>`;
   }
   try {
     await loadConfig();

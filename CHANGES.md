@@ -129,3 +129,17 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
 - 启动器：`--startup-timeout`（默认 60s）；`ServerThread` 捕获并记录启动异常（含 traceback）
 - **GUI 版日志落盘**：无控制台时把 stdout/stderr 重定向到 `%APPDATA%\MovieDock\logs\app.log`
 - desktop_checks 扩到 37 项（启动页/日志/超时路径）
+
+---
+
+## 0.2.2
+
+修实测反馈：**「在候选结果区空白处双击粘贴磁力」根本点不到**（未搜索时结果区是空的、高度 0，入口等于不存在）。
+
+- 搜索栏新增醒目按钮 **「粘贴磁力/直链」**；空态结果区里也放了一个同样的按钮（双入口）
+- 手工粘贴时下载链接输入框**可编辑**（候选来源仍只读）；粘贴后**自动从磁力 dn= 解析片名/年份**填好
+- `parse_title_year` 重写为"遇压制标记即截断"策略，命名更干净：
+  - `WALL-E.2008.2160p.UHD.BDRemux...` → `WALL-E`（原来是 `WALL-E 2008`）
+  - `Spider-Man.No.Way.Home.2021.2160p.WEB-DL...` → `Spider-Man No Way Home`
+  - 顺手支持点号分词、体积标记（`1.20GB`）、磁力 dn= 推断
+- desktop_checks 增至 41 项（含前端入口可见性检查）；unit_checks 增至 39 项

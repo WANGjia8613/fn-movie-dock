@@ -205,3 +205,9 @@ body { line-height: 1.5; }
 
 .provider input[type="password"] { font-family: inherit; }
 .search-form .row .btn.best { white-space: nowrap; }
+
+/* ---------- 结果区空态 / 粘贴入口 ---------- */
+.results { min-height: 120px; }
+.empty .btn-paste-inline { margin-top: 4px; }
+.btn-paste-inline { font-size: 13px; }
+#dl-url[readonly] { opacity: .75; }
