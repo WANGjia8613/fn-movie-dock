@@ -134,6 +134,24 @@ check("pidfile_cleared", launcher._port_from_pidfile() is None, "None")
 env = runtime.describe_environment()
 check("describe_environment", {"platform", "aria2", "7z", "webview"} <= set(env), list(env))
 
+# ---------- 7) 启动页与启动日志（修“拒绝连接”缺陷的配套） ----------
+from app.desktop import window as win_mod  # noqa: E402
+
+splash = ROOT / "app" / "static" / "splash.html"
+check("splash_exists", splash.exists(), str(splash))
+if splash.exists():
+    text = splash.read_text(encoding="utf-8")
+    check("splash_polls_health", "/api/health" in text and "location.replace" in text, "poll ok")
+    check("splash_has_timeout_hint", "启动超时" in text, "timeout hint")
+check("splash_url_has_port", "port=8090" in win_mod.splash_url(8090), win_mod.splash_url(8090))
+check("splash_url_is_file_uri", win_mod.splash_url(8090).startswith("file://"), win_mod.splash_url(8090)[:30])
+
+log_path = launcher.setup_logging()
+check("setup_logging_returns_path", log_path is not None and str(log_path).endswith("app.log"), log_path)
+check("wait_health_dead_port_none", launcher.wait_health(1, timeout=1.0) is None, "None")
+_st = launcher.ServerThread("127.0.0.1", 1)
+check("server_thread_captures_error", hasattr(_st, "error") and _st.error is None, "attr ok")
+
 print("=" * 68)
 failed = 0
 for name, status, detail in results:

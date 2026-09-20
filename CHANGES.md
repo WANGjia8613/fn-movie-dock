@@ -117,3 +117,15 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
 - `subtitle/extract.py` 的工具探测改走 `runtime.find_tool`（Windows 上自动用随包 `7z.exe`，支持 rar）
 - `config.py`：配置文件路径按平台落位；`downloader.aria2` 新增 `auto_start` / `binary` / `port`
 - Docker 行为不变（`auto_start=False`，保持由 entrypoint 拉起 aria2）
+
+---
+
+## 0.2.1
+
+修掉实测暴露的问题：**窗口先打开、本地服务还没就绪 → 显示「127.0.0.1 拒绝连接」**（首次启动被杀软扫描 1160 个文件时很容易触发）。
+
+- 新增启动页 `app/static/splash.html`：服务没就绪时先显示「片坞正在启动…」，每秒轮询 `/api/health`，就绪自动跳转；90 秒仍未就绪则给出可操作错误（端口占用/杀软拦截/运行 selftest）
+- `window.py` 加守候线程：服务就绪后主动把窗口从启动页切到应用页（双保险）；运行中掉线会重新检测
+- 启动器：`--startup-timeout`（默认 60s）；`ServerThread` 捕获并记录启动异常（含 traceback）
+- **GUI 版日志落盘**：无控制台时把 stdout/stderr 重定向到 `%APPDATA%\MovieDock\logs\app.log`
+- desktop_checks 扩到 37 项（启动页/日志/超时路径）

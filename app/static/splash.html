@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>片坞 Movie Dock · 正在启动</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #0f1419; color: #e8eef6;
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    }
+    .card { width: min(560px, 88vw); background: #1a222d; border: 1px solid #2c3848; border-radius: 14px; padding: 28px; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p { color: #93a0b4; font-size: 13px; line-height: 1.7; margin: 6px 0; }
+    .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #2c3848; border-top-color: #3d8bfd; animation: r 1s linear infinite; margin: 14px 0; }
+    @keyframes r { to { transform: rotate(360deg); } }
+    .err { display: none; background: rgba(240,113,120,.12); border: 1px solid rgba(240,113,120,.35); color: #f07178; padding: 12px; border-radius: 10px; font-size: 13px; }
+    code { background: #0f1419; padding: 2px 6px; border-radius: 6px; color: #8ab6ff; }
+    .row { display: flex; gap: 10px; align-items: center; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>片坞正在启动…</h1>
+    <div class="row"><div class="spin" id="spin"></div><p id="status">等待本地服务就绪（首次启动可能较慢）</p></div>
+    <p>如果超过 90 秒仍未进入，请把错误信息连同日志发给开发者：<br />
+      <code id="logpath">%APPDATA%\MovieDock\logs\app.log</code>
+    </p>
+    <div class="err" id="err"></div>
+    <p style="margin-top:14px">
+      排查：① 在程序目录运行 <code>MovieDockCLI.exe --selftest</code>；
+      ② 确认 8090 端口没被占用（设置里可换端口）。
+    </p>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const port = params.get("port") || "8090";
+    const target = `http://127.0.0.1:${port}/`;
+    const health = `http://127.0.0.1:${port}/api/health`;
+    const statusEl = document.getElementById("status");
+    const errEl = document.getElementById("err");
+    let tries = 0;
+    const maxTries = 90;
+
+    async function poll() {
+      tries += 1;
+      try {
+        const res = await fetch(health, { cache: "no-store" });
+        if (res.ok) {
+          statusEl.textContent = "服务已就绪，正在进入…";
+          location.replace(target);
+          return;
+        }
+      } catch (e) { /* 服务还没起来，继续等 */ }
+      if (tries >= maxTries) {
+        document.getElementById("spin").style.display = "none";
+        statusEl.textContent = "启动超时";
+        errEl.style.display = "block";
+        errEl.textContent = `本地服务（127.0.0.1:${port}）在 90 秒内没有就绪。` +
+          `可能原因：端口被占用、杀毒软件拦截、或程序被解压到受限目录。` +
+          `请在程序目录执行 MovieDockCLI.exe --selftest 并把输出发给开发者。`;
+        return;
+      }
+      statusEl.textContent = `等待本地服务就绪…（${tries}s）`;
+      setTimeout(poll, 1000);
+    }
+    poll();
+  </script>
+</body>
+</html>

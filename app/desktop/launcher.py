@@ -28,6 +28,28 @@ from .. import __version__, runtime
 
 DEFAULT_WINDOW = (1360, 900)
 
+# 冻结后的 GUI 版没有控制台，stdout/stderr 为 None —— 把输出重定向到日志文件
+_LOG_HANDLE = None
+
+
+def setup_logging() -> Path | None:
+    """GUI(无控制台) 模式下把打印写进 %APPDATA%\\MovieDock\\logs\\app.log。"""
+    global _LOG_HANDLE
+    try:
+        log_dir = runtime.app_data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "app.log"
+        if sys.stdout is None or sys.stderr is None:
+            if _LOG_HANDLE is None or getattr(_LOG_HANDLE, "closed", False):
+                _LOG_HANDLE = path.open("a", encoding="utf-8", buffering=1)
+            if sys.stdout is None:
+                sys.stdout = _LOG_HANDLE
+            if sys.stderr is None:
+                sys.stderr = _LOG_HANDLE
+        return path
+    except OSError:
+        return None
+
 
 # ---------------------------------------------------------------- 配置准备
 def _copy_example_config(dest: Path) -> bool:
@@ -158,15 +180,25 @@ class ServerThread(threading.Thread):
         self.port = port
         self.log_level = log_level
         self.server = None
+        self.error: BaseException | None = None
+        self.error_traceback = ""
 
     def run(self) -> None:
+        import traceback
+
         import uvicorn
 
         from ..main import app
 
         config = uvicorn.Config(app, host=self.host, port=self.port, log_level=self.log_level)
         self.server = uvicorn.Server(config)
-        self.server.run()
+        try:
+            self.server.run()
+        except BaseException as exc:  # noqa: BLE001 - 线程内异常必须自己抓住
+            self.error = exc
+            self.error_traceback = traceback.format_exc()
+            print(f"[片坞] ✗ 本地服务启动失败：{exc!r}", file=sys.stderr)
+            print(self.error_traceback, file=sys.stderr)
 
     def stop(self) -> None:
         if self.server is not None:
@@ -277,6 +309,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--browser", action="store_true", help="用默认浏览器代替内置窗口")
     p.add_argument("--no-tray", action="store_true", help="不创建托盘图标")
     p.add_argument("--log-level", default="warning", help="uvicorn 日志级别")
+    p.add_argument("--startup-timeout", type=float, default=60.0,
+                   help="等待本地服务就绪的秒数（首次启动较慢可调大）")
     p.add_argument("--version", action="store_true", help="打印版本")
     return p
 
@@ -284,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     runtime.ensure_utf8()
+    log_path = setup_logging()
+    if log_path:
+        print(f"=== 片坞启动 {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+        print(f"[片坞] 日志文件：{log_path}")
     if args.version:
         print(f"Movie Dock {__version__}")
         return 0
@@ -305,11 +343,13 @@ def main(argv: list[str] | None = None) -> int:
 
     server = ServerThread(args.host, port, args.log_level)
     server.start()
-    health = wait_health(port)
+    health = wait_health(port, timeout=args.startup_timeout)
     if health:
         print(f"[片坞] 服务已就绪：http://127.0.0.1:{port}")
+    elif server.error is not None:
+        print(f"[片坞] ✗ 服务异常退出：{server.error!r}")
     else:
-        print("[片坞] ⚠ 服务启动超时，请查看日志")
+        print(f"[片坞] ⚠ 服务启动超时（{args.startup_timeout:.0f}s），将先显示启动页")
 
     if args.selftest:
         code = selftest(port, args.host)
@@ -353,7 +393,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             from .window import open_window
 
-            exit_code = open_window(url, title=f"片坞 Movie Dock {__version__}", no_tray=args.no_tray)
+            exit_code = open_window(
+                url,
+                port,
+                title=f"片坞 Movie Dock {__version__}",
+                no_tray=args.no_tray,
+                ready_timeout=max(5.0, args.startup_timeout),
+            )
     finally:
         server.stop()
         runtime.terminate_process(aria2_proc)
