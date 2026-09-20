@@ -20,15 +20,30 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..config import ProviderConfig
 from ..llm import detect_quality
 from ..models import SearchRequest, SourceItem
+from ..ranking import _compact, _query_tokens
 from . import SearchProvider
 from .common import build_magnet, classify_url, human_size, int_or_none
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..llm import LLMClient
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def is_relevant(query: str, title: str) -> bool:
+    """标题是否与关键词相关：词元命中或整串（去分隔符）命中。"""
+    low = (title or "").lower()
+    if any(t in low for t in _query_tokens(query)):
+        return True
+    compact = _compact(query)
+    return bool(len(compact) >= 4 and compact in _compact(title))
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -240,9 +255,11 @@ class BuiltinProvider(SearchProvider):
         *,
         global_proxy: str = "",
         global_timeout: int = 20,
+        llm: "LLMClient | None" = None,
     ):
         self.pc = pc
         self.name = pc.name or "内置索引"
+        self.llm = llm
         opts = pc.options or {}
         keys = [k.strip().lower() for k in str(opts.get("sources") or DEFAULT_SOURCES).split(",") if k.strip()]
         self.sources = [_BUILTIN_SOURCES[k]() for k in keys if k in _BUILTIN_SOURCES]
@@ -260,12 +277,20 @@ class BuiltinProvider(SearchProvider):
 
     async def search(self, req: SearchRequest) -> tuple[list[SourceItem], list[str]]:
         query = req.query.strip()
-        if query:
-            hints = [query]
-            if req.year:
-                hints.append(f"{query} {req.year}")
-        else:
+        if not query:
             return [], ["「内置索引」请输入片名"]
+
+        cjk = bool(_CJK_RE.search(query))
+        hints = [query]
+        if req.year:
+            hints.append(f"{query} {req.year}")
+        # 中文关键词在英文站上无效：有大模型就自动翻成英文再搜
+        if cjk:
+            english = await self._llm_english_title(query, req.year)
+            if english:
+                hints.insert(0, english)
+                if req.year:
+                    hints.insert(1, f"{english} {req.year}")
 
         warnings: list[str] = []
         items: list[SourceItem] = []
@@ -285,12 +310,6 @@ class BuiltinProvider(SearchProvider):
                     items.extend(found)
                     break  # 该源用第一个有结果的提示词即可
 
-        if not items:
-            warnings.append(
-                f"内置索引（{', '.join(s.label for s in self.sources)}）都没有结果："
-                "换关键词、或在设置里给该源配代理（全局 network.proxy）"
-            )
-
         # 去重（按 url）
         seen: set[str] = set()
         uniq: list[SourceItem] = []
@@ -301,12 +320,55 @@ class BuiltinProvider(SearchProvider):
             seen.add(key)
             uniq.append(item)
 
+        # 相关度过滤：索引站常返回“沾边”结果（中文关键词甚至会返回一堆无关内容）
+        relevant = [i for i in uniq if is_relevant(query, i.title) or (
+            hints and hints[0] != query and is_relevant(hints[0], i.title)
+        )]
+        if relevant:
+            uniq = relevant
+        elif uniq and (_query_tokens(query) or cjk):
+            reason = (
+                "中文关键词在这些英文索引站上无效（TPB/YTS 不会中文匹配，返回的都是无关结果）。"
+                "建议：① 用英文片名搜（例：WALL-E）；② 在「设置 → 网络（代理）」填代理以启用 DMHY 中文源；"
+                "③ 在「设置 → 大模型」配好 API Key 后，会自动把中文名翻成英文再搜。"
+                if cjk
+                else "返回的结果与关键词都不相关，已过滤；换个更准确的关键词试试。"
+            )
+            return [], warnings + [reason]
+
+        if not uniq:
+            warnings.append(
+                f"内置索引（{', '.join(s.label for s in self.sources)}）都没有结果："
+                "换关键词、或在设置里给该源配代理（全局 network.proxy）"
+            )
+
         if req.quality:
             q = req.quality.lower()
             filtered = [i for i in uniq if q in (i.resolution or i.quality or "").lower()]
             if filtered:
                 uniq = filtered
         return uniq, warnings
+
+    async def _llm_english_title(self, query: str, year: int | None = None) -> str:
+        """用已配置的大模型把中文片名换成英文名（失败不影响主流程）。"""
+        if self.llm is None or not getattr(self.llm.cfg, "api_key", ""):
+            return ""
+        hint = f"{query} {year}" if year else query
+        system = (
+            "你是影视名称助手。用户给一个中文片名，输出它最常见的**英文片名**（用于 BT 站搜索），"
+            "只输出片名本身，不要年份、不要引号、不要其它说明。"
+        )
+        try:
+            text = await self.llm.chat(
+                [{"role": "system", "content": system}, {"role": "user", "content": hint}],
+                temperature=0,
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+        text = (text or "").strip().strip("\"'`。. ")
+        if not text or _CJK_RE.search(text) or len(text) > 80:
+            return ""
+        return text
 
 
 __all__ = ["BuiltinProvider", "TPBSource", "YTSSource", "DMHYSource", "DEFAULT_SOURCES", "classify_url"]

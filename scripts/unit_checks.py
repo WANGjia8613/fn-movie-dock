@@ -381,6 +381,113 @@ prov3.sources = [_FakeSource()]
 res_items, res_warn = _aio.run(prov3.search(SearchRequest(query="wall-e")))
 check("builtin_merge_dedupe", len(res_items) == 2, f"{len(res_items)} 条")
 
+
+# 相关度过滤：无关结果必须剔除（真机发现 TPB 对中文关键词返回垃圾）
+class _GarbageSource:
+    key = "garbage"
+    label = "垃圾源"
+    endpoints = ["http://x"]
+    limit = 10
+
+    async def search(self, client, query, source_name):  # noqa: ANN001
+        from app.models import SourceItem as _SI
+
+        return [
+            _SI(id="g1", title="Avira System Speedup Pro + Crack", quality="未知",
+                url="magnet:?xt=urn:btih:junk1", url_type="magnet"),
+            _SI(id="g2", title="Some Other Unrelated Movie 1999", quality="1080p",
+                url="magnet:?xt=urn:btih:junk2", url_type="magnet"),
+            _SI(id="g3", title="WALL-E 2008 1080p BluRay", quality="1080p",
+                url="magnet:?xt=urn:btih:good3", url_type="magnet"),
+        ], ""
+
+
+prov4 = BuiltinProvider(ProviderConfig(type="builtin", enabled=True, options={}))
+prov4.sources = [_GarbageSource()]
+items4, _w4 = _aio.run(prov4.search(SearchRequest(query="wall-e")))
+check("builtin_relevance_filter", len(items4) == 1 and items4[0].id == "g3", [i.id for i in items4])
+
+prov5 = BuiltinProvider(ProviderConfig(type="builtin", enabled=True, options={}))
+prov5.sources = [_GarbageSource()]
+items5, warn5 = _aio.run(prov5.search(SearchRequest(query="机器人总动员", year=2008)))
+check("builtin_cjk_all_garbage_dropped", len(items5) == 0, f"{len(items5)} 条")
+check("builtin_cjk_hint", any("中文关键词" in w for w in warn5), str(warn5)[:120])
+
+
+# 大模型翻译辅助：中文名 → 英文名后再搜
+class _FakeLLM:
+    class cfg:  # noqa: N801
+        api_key = "sk-test"
+
+    async def chat(self, messages, temperature=0):  # noqa: ANN001, ARG002
+        return "WALL-E"
+
+
+class _HintRecorder:
+    key = "rec"
+    label = "记录源"
+    endpoints = ["http://x"]
+    limit = 10
+
+    def __init__(self):
+        self.seen: list[str] = []
+
+    async def search(self, client, query, source_name):  # noqa: ANN001
+        from app.models import SourceItem as _SI
+
+        self.seen.append(query)
+        if query.upper() == "WALL-E":
+            return [_SI(id="r1", title="WALL-E 2008 1080p", quality="1080p",
+                        url="magnet:?xt=urn:btih:good", url_type="magnet")], ""
+        return [], "无结果"
+
+
+rec = _HintRecorder()
+prov6 = BuiltinProvider(ProviderConfig(type="builtin", enabled=True, options={}), llm=_FakeLLM())
+prov6.sources = [rec]
+items6, _w6 = _aio.run(prov6.search(SearchRequest(query="机器人总动员", year=2008)))
+check("builtin_llm_translate_used", "WALL-E" in rec.seen and len(items6) == 1, str(rec.seen))
+
+# ---------- 12) 老配置自动迁移（0.2.x 没有 builtin，升级后必须补上） ----------
+import yaml as _yaml  # noqa: E402
+
+mig_dir = Path(tempfile.mkdtemp(prefix="moviedock-migrate-"))
+old_cfg_path = mig_dir / "config.yaml"
+old_cfg_path.write_text(
+    _yaml.safe_dump(
+        {
+            "paths": {"download_root": str(mig_dir / "dl"), "state_dir": str(mig_dir / "data")},
+            "search": {
+                "providers": [
+                    {"type": "demo", "enabled": False, "name": "演示数据"},
+                    {"type": "llm", "enabled": False, "name": "大模型检索"},
+                    {"type": "qbittorrent", "enabled": True, "name": "qBittorrent 搜索",
+                     "url": "http://127.0.0.1:8085",
+                     "options": {"username": "admin", "password": "", "plugins": "yts,bt4g"}},
+                    {"type": "custom_api", "enabled": False, "name": "自定义索引"},
+                ]
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    ),
+    encoding="utf-8",
+)
+os.environ["MOVIE_DOCK_CONFIG"] = str(old_cfg_path)
+migrated = load_config(old_cfg_path)
+types = [p.type for p in migrated.search.providers]
+check("migrate_builtin_injected", "builtin" in types, str(types))
+check("migrate_builtin_enabled",
+      next(p for p in migrated.search.providers if p.type == "builtin").enabled is True,
+      "enabled")
+check("migrate_builtin_first", types[0] == "builtin", str(types[:2]))
+check("migrate_keeps_old_providers", "qbittorrent" in types, str(types))
+back = _yaml.safe_load(old_cfg_path.read_text(encoding="utf-8"))
+check("migrate_persisted",
+      any(p.get("type") == "builtin" for p in back["search"]["providers"]),
+      "写入配置")
+os.environ["MOVIE_DOCK_CONFIG"] = str(TMP / "config.yaml")
+
 # ---------- 输出 ----------
 print("=" * 68)
 failed = 0

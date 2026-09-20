@@ -29,7 +29,14 @@ def load_providers(cfg: AppConfig) -> list[SearchProvider]:
         if not pc.enabled:
             continue
         if pc.type == "builtin":
-            providers.append(BuiltinProvider(pc, global_proxy=proxy, global_timeout=timeout))
+            providers.append(
+                BuiltinProvider(
+                    pc,
+                    global_proxy=proxy,
+                    global_timeout=timeout,
+                    llm=LLMClient(cfg.llm),
+                )
+            )
         elif pc.type == "demo":
             providers.append(DemoProvider(pc))
         elif pc.type == "llm":

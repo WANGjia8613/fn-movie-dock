@@ -250,8 +250,8 @@ function renderResults(items, warnings, providers, bestId) {
   if (!items.length) {
     box.innerHTML = `<div class="empty">
       没有检索到候选。<br/>
-      ① 直接用「粘贴磁力/直链」下载（推荐，不依赖检索源）；
-      ② 或在「设置 → 检索源」里配置 qBittorrent / 自定义索引后点「搜索」。
+      ① 检查「设置 → 检索源」里<b>内置索引</b>是否勾选（源：tpb/yts/dmhy）；境外源需在「网络（代理）」里填代理；
+      ② 或直接用「粘贴磁力/直链」下载（不依赖任何检索源）。
       <div style="margin-top:10px"><button class="btn primary btn-paste-inline" type="button">粘贴磁力/直链</button></div>
     </div>`;
     return;

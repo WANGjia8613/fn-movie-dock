@@ -277,8 +277,27 @@ _DEFAULT_DATA: dict[str, Any] = {
 _REQUIRED_PROVIDERS = ("demo", "llm", "custom_api")
 
 
-def _ensure_provider_types(cfg: AppConfig) -> AppConfig:
-    """保证界面始终能编辑到内置三类源（qbittorrent 可选，不强制注入）。"""
+_REQUIRED_PROVIDERS = ("demo", "llm", "custom_api")
+
+# 内置索引源条目（老配置缺它时自动补上）
+_BUILTIN_PROVIDER = {
+    "type": "builtin",
+    "enabled": True,
+    "name": "内置索引",
+    "options": {"sources": "tpb,yts,dmhy", "limit": "60"},
+}
+
+
+def _ensure_provider_types(cfg: AppConfig, *, migrate_builtin: bool = True) -> tuple[AppConfig, bool]:
+    """保证内置源与三类基础源都存在；返回 (配置, 是否有改动)。
+
+    migrate_builtin=True 时：若配置里根本没有 builtin（0.2.x 老配置），
+    则补上并**默认启用** —— 否则升级后搜索依旧是空的（用户实际踩过）。
+    """
+    changed = False
+    existing = {p.type for p in cfg.search.providers}
+    merged = list(cfg.search.providers)
+
     required = [
         ProviderConfig(type="demo", enabled=False, name="演示数据"),
         ProviderConfig(type="llm", enabled=False, name="大模型检索"),
@@ -291,15 +310,19 @@ def _ensure_provider_types(cfg: AppConfig) -> AppConfig:
             headers={},
         ),
     ]
-    existing = {p.type for p in cfg.search.providers}
-    if set(_REQUIRED_PROVIDERS) <= existing:
-        return cfg
-    merged = list(cfg.search.providers)
     for item in required:
         if item.type not in existing:
             merged.append(item)
-    cfg.search = SearchConfig(providers=merged, sort_by_score=cfg.search.sort_by_score)
-    return cfg
+            existing.add(item.type)
+            changed = True
+
+    if migrate_builtin and "builtin" not in existing:
+        merged.insert(0, ProviderConfig.model_validate(_BUILTIN_PROVIDER))
+        changed = True
+
+    if changed:
+        cfg.search = SearchConfig(providers=merged, sort_by_score=cfg.search.sort_by_score)
+    return cfg, changed
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -347,7 +370,14 @@ def load_config(path: Path | None = None) -> AppConfig:
                 continue
         else:
             cursor[leaf] = raw
-    return _ensure_provider_types(AppConfig.model_validate(data))
+    cfg, migrated = _ensure_provider_types(AppConfig.model_validate(data))
+    if migrated and cfg_path.exists():
+        # 老配置自动补上新源后落盘一份，避免“升了版本但功能没生效”
+        try:
+            save_app_config(cfg)
+        except OSError:
+            pass
+    return cfg
 
 
 def _read_yaml_dict(cfg_path: Path) -> dict[str, Any]:
