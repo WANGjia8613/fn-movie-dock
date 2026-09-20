@@ -65,6 +65,49 @@ jobs:
         shell: bash
         run: pyinstaller packaging/moviedock.spec --noconfirm
 
+      - name: 代码签名（自签名证书；未配 secret 则跳过）
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WIN_CSC_PFX_B64 }}
+          PFX_PASSWORD: ${{ secrets.WIN_CSC_PFX_PASSWORD }}
+        run: |
+          if (-not $env:PFX_B64) {
+            Write-Host "未配置 WIN_CSC_PFX_B64，跳过代码签名"
+            exit 0
+          }
+          [IO.File]::WriteAllBytes("$PWD\codesign.pfx", [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          Write-Host "signtool: $signtool"
+          foreach ($f in @("dist\MovieDock\MovieDock.exe", "dist\MovieDock\MovieDockCLI.exe")) {
+            Write-Host "签名 $f"
+            & $signtool sign /f codesign.pfx /p $env:PFX_PASSWORD /fd SHA256 `
+                /tr http://timestamp.digicert.com /td SHA256 /v "$f"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "带时间戳签名失败（网络？），改为不带时间戳重试" -ForegroundColor Yellow
+              & $signtool sign /f codesign.pfx /p $env:PFX_PASSWORD /fd SHA256 /v "$f"
+              if ($LASTEXITCODE -ne 0) { throw "签名失败：$f" }
+            }
+          }
+          Remove-Item "$PWD\codesign.pfx" -Force
+
+      - name: 验证签名（指纹必须与 secret 一致）
+        shell: pwsh
+        env:
+          EXPECTED: ${{ secrets.WIN_CSC_THUMBPRINT }}
+        run: |
+          if (-not $env:EXPECTED) {
+            Write-Host "未配置 WIN_CSC_THUMBPRINT，跳过校验"
+            exit 0
+          }
+          foreach ($f in @("dist/MovieDock/MovieDock.exe", "dist/MovieDock/MovieDockCLI.exe")) {
+            $sig = Get-AuthenticodeSignature $f
+            Write-Host "$f  Status=$($sig.Status)  Thumbprint=$($sig.SignerCertificate.Thumbprint)"
+            if (-not $sig.SignerCertificate) { throw "签名缺失：$f" }
+            if ($sig.SignerCertificate.Thumbprint -ne $env:EXPECTED) { throw "指纹不匹配：$f" }
+          }
+          Write-Host "两个 exe 签名均已校验通过" -ForegroundColor Green
+
       - name: 打包产物自检（MovieDockCLI.exe --selftest）
         shell: bash
         run: |
@@ -80,6 +123,13 @@ jobs:
       - name: 压缩 + 校验和
         shell: pwsh
         run: |
+          # 把自签名证书与信任脚本一起放进包里，方便用户本机导入信任
+          if (Test-Path packaging/selfsigned/moviedock-codesign.cer) {
+            Copy-Item packaging/selfsigned/moviedock-codesign.cer dist/MovieDock/ -Force
+          }
+          if (Test-Path packaging/trust-moviedock-cert.ps1) {
+            Copy-Item packaging/trust-moviedock-cert.ps1 dist/MovieDock/ -Force
+          }
           Compress-Archive -Path dist/MovieDock/* -DestinationPath MovieDock-win64.zip -Force
           $hash = (Get-FileHash MovieDock-win64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  MovieDock-win64.zip" | Set-Content -Encoding ASCII SHA256SUMS.txt
@@ -109,9 +159,15 @@ jobs:
             - `MovieDockCLI.exe`：控制台版，排查问题用（`--selftest` / `--headless`）
             - 首次启动会生成配置：`%APPDATA%\MovieDock\config.yaml`
             - 随包已带 `aria2c.exe` 与 `7z.exe/7z.dll`，无需另装
-            - 未做代码签名，SmartScreen 可能提示，选择「仍要运行」即可
+
+            **关于签名（自签名证书，非商业 CA）**
+            - 两个 exe 都已用项目自签名证书签名（SHA256 + 时间戳），SHA1 指纹 `92A2 0205 A8 4C 86 75 86 BD 8E 16 71 D7 B2 B9 A3 1D 2B CC`
+            - 想彻底去掉“未知发布者 / SmartScreen”提示：**右键 `trust-moviedock-cert.ps1` → 使用 PowerShell 运行**（会请求管理员权限，把 `moviedock-codesign.cer` 导入本机受信任根/发布者）
+            - 不想导入证书也没关系：点“更多信息 → 仍要运行”即可
+            - 说明：自签名证书能让 Windows 认可签名有效，但 **SmartScreen 的下载信誉**提示需要商业证书（OV/EV）或 Azure Trusted Signing 才能完全消除
           files: |
             MovieDock-win64.zip
             SHA256SUMS.txt
+            packaging/selfsigned/moviedock-codesign.cer
           draft: false
           prerelease: false

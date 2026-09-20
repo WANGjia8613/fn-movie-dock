@@ -203,3 +203,23 @@ scripts/smoke_local.py     真实起服务跑通 health/search/config/downloader
 - **演示数据**：设置页标注为「演示数据（调试用，假链接）」，并加说明（假链接不能真下载，正常使用保持关闭）
 - 新增 `scripts/ci_ops_test.py`：真机链路测试（限速下载 → 暂停 → 继续 → 完成 → 删除记录 → 连文件删除），已接入两个 CI
 - 版本 0.3.1 → 0.4.0
+
+---
+
+## 0.4.1
+
+**代码签名（自签名证书）**：去掉 Windows 的"未知发布者"提示。
+
+- 生成项目自签名代码签名证书（`CN=MovieDock Self-Signed (WANGjia8613)`，10 年，含 `Code Signing` EKU）
+  - 公开证书入库：`packaging/selfsigned/moviedock-codesign.cer`
+  - 指纹：`92A20205A84C867586BD8E1671D7B2B9A31D2BCC`
+  - 私钥/PKCS#12/口令**不入库**，只存在本地受保护目录 + GitHub Secrets
+    （`WIN_CSC_PFX_B64` / `WIN_CSC_PFX_PASSWORD` / `WIN_CSC_THUMBPRINT`）
+- CI（windows-build）：PyInstaller 打包后对 `MovieDock.exe`、`MovieDockCLI.exe`
+  用 `signtool` 签名（SHA256 + DigiCert 时间戳，失败自动降级为不带时间戳），
+  并用 `Get-AuthenticodeSignature` **校验指纹**，不一致直接失败
+- 随包提供 `trust-moviedock-cert.ps1`：右键运行（自动提权）即把证书导入
+  `LocalMachine\Root` + `LocalMachine\TrustedPublisher`，之后签名被本机认可
+- `scripts/make_signing_cert.sh`：一键重新生成证书并提示如何更新 Secrets
+- 预期管理：自签名能消除"未知发布者"；**SmartScreen 的下载信誉提示**需商业证书（OV/EV）或 Azure Trusted Signing
+- 版本 0.4.0 → 0.4.1

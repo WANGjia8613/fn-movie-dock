@@ -31,3 +31,10 @@ build/
 dist/
 *.zip
 SHA256SUMS.txt
+
+# 签名私钥/口令绝不入库（只提交公开证书 .cer 与信任脚本）
+packaging/selfsigned/*.pfx
+packaging/selfsigned/*.key
+packaging/selfsigned/*.pem
+packaging/selfsigned/*password*
+*.pfx
