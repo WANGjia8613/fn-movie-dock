@@ -29,6 +29,9 @@ if VENDOR.exists():
     datas.append((str(VENDOR), "vendor"))
 
 hiddenimports = [
+    "app.desktop.launcher",
+    "app.desktop.window",
+    "app.desktop.tray",
     "uvicorn.logging",
     "uvicorn.loops",
     "uvicorn.loops.auto",
@@ -61,7 +64,7 @@ icon_path = SPEC_DIR / "moviedock.ico"
 icon = str(icon_path) if icon_path.exists() else None
 
 a = Analysis(
-    [str(ROOT / "app" / "desktop" / "launcher.py")],
+    [str(SPEC_DIR / "entry.py")],
     pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
