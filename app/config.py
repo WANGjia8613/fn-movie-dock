@@ -89,6 +89,8 @@ class SubtitleConfig(BaseModel):
     match_hint: str = ""
     # 优先语言（用于排序）：简中 > 双语 > 繁中
     prefer_bilingual: bool = True
+    # 简体优先（大陆用户默认开）：同发布版本下优先选简体字幕
+    prefer_simplified: bool = True
     # 重命名规则：{video} 为视频文件名（不含扩展名）
     name_template: str = "{video}.zh"
     # rar/7z 解压工具（容器内已装 p7zip + libarchive-tools）
@@ -227,6 +229,7 @@ _DEFAULT_DATA: dict[str, Any] = {
         "extra_keywords": [],
         "match_hint": "",
         "prefer_bilingual": True,
+        "prefer_simplified": True,
         "name_template": "{video}.zh",
         "extract_tools": ["7z", "7zz", "bsdtar", "unrar", "unar"],
         "timeout_seconds": 30,

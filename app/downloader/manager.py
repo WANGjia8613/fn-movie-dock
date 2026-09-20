@@ -25,6 +25,25 @@ MEDIA_EXTS = {
 }
 
 
+def _friendly_aria2_error(raw: str) -> str:
+    """把 aria2 的英文错误改成能看懂的中文提示（保留原文便于排查）。"""
+    text = (raw or "").strip()
+    low = text.lower()
+    mapping = [
+        ("already registered", "该资源已在 aria2 下载列表中（可能正在下载），无需重复添加"),
+        ("no uri", "链接为空或无法识别"),
+        ("not found", "aria2 中找不到该任务"),
+        ("timeout", "连接超时（资源站/做种者不可达）"),
+        ("unrecognized", "链接格式无法识别"),
+        ("unfinished", "仍有未完成的分片，下载已中断"),
+        ("max file not found", "种子内找不到可下载的文件"),
+    ]
+    for key, zh in mapping:
+        if key in low:
+            return f"{zh}（aria2: {text[:120]}）"
+    return text
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -95,6 +114,7 @@ class DownloadTask:
             subtitle_status=self.subtitle_status,
             subtitle_path=self.subtitle_path,
             subtitle_note=self.subtitle_note,
+            engine=self.engine,
             error=self.error,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -139,6 +159,10 @@ class Aria2Client:
             "files",
             "errorMessage",
             "dir",
+            # 磁力链接：元数据下载会派生真正的下载任务
+            "followedBy",
+            "following",
+            "belongsTo",
         ]
         result = await self.call("aria2.tellStatus", [gid, keys])
         return result if isinstance(result, dict) else {}
@@ -340,7 +364,7 @@ class DownloadManager:
                 self._persist()
         except Exception as exc:  # noqa: BLE001
             task.status = "error"
-            task.error = str(exc)
+            task.error = _friendly_aria2_error(str(exc))
             task.updated_at = _now()
             self._dirty = True
             self._persist()
@@ -439,6 +463,22 @@ class DownloadManager:
                 continue
             if not st:
                 continue
+
+            # 磁力链接：首次 addUri 拿到的是「元数据下载」的 GID，
+            # 元数据完成时 aria2 会派生子任务（followedBy）——那才是真正的下载。
+            followed = st.get("followedBy")
+            if isinstance(followed, list) and followed:
+                new_gid = str(followed[0] or "")
+                if new_gid and new_gid != task.gid:
+                    task.gid = new_gid
+                    task.status = "active"
+                    task.updated_at = _now()
+                    self._dirty = True
+                    try:
+                        st = await self.aria2.tell_status(new_gid) or st
+                    except Exception:  # noqa: BLE001
+                        continue
+
             status = str(st.get("status") or "")
             if status:
                 task.status = status
@@ -471,12 +511,18 @@ class DownloadManager:
                 task.files = file_paths
                 task.saved_path = str(Path(file_paths[0]).parent)
             if st.get("errorMessage"):
-                task.error = str(st.get("errorMessage"))
+                task.error = _friendly_aria2_error(str(st.get("errorMessage")))
             task.updated_at = _now()
             self._dirty = True
 
             if status == "complete":
                 paths = self._collect_output_files(task, file_paths)
+                primary = self._pick_primary(paths)
+                # 磁力元数据刚完成时文件还是 0 字节/占位，别急着整理
+                if primary is not None and not self._file_complete(primary, files_raw):
+                    task.status = "active"
+                    task.progress = min(task.progress, 99.9)
+                    continue
                 task.saved_path = str(paths[0].parent) if paths else self.task_dir(task)
                 task.status = "complete"
                 await self._finish_task(task, paths)
@@ -486,11 +532,16 @@ class DownloadManager:
                     task.error = "下载失败"
 
     def _collect_output_files(self, task: DownloadTask, file_paths: list[str]) -> list[Path]:
-        """优先用 aria2 报的准确文件列表；仅在缺失时回退到任务自己的目录扫描。"""
+        """优先用 aria2 报的准确文件列表；仅在缺失时回退到任务自己的目录扫描。
+
+        会排除 .aria2 临时文件与 .torrent 元数据文件。
+        """
         candidates: list[Path] = []
         for raw in file_paths:
             p = Path(raw)
-            if p.exists() and p.is_file() and not p.name.endswith(".aria2"):
+            if p.suffix.lower() == ".torrent" or p.name.endswith(".aria2"):
+                continue
+            if p.exists() and p.is_file():
                 candidates.append(p)
         if not candidates:
             root = self.task_dir(task)
@@ -498,9 +549,38 @@ class DownloadManager:
                 candidates = [
                     p
                     for p in root.rglob("*")
-                    if p.is_file() and not p.name.endswith(".aria2")
+                    if p.is_file()
+                    and p.suffix.lower() != ".torrent"
+                    and not p.name.endswith(".aria2")
                 ]
         return candidates
+
+    @staticmethod
+    def _pick_primary(paths: list[Path]) -> Path | None:
+        media = [p for p in paths if p.suffix.lower() in MEDIA_EXTS]
+        if media:
+            return max(media, key=DownloadManager._safe_size)
+        files = [p for p in paths if p.is_file()]
+        return max(files, key=DownloadManager._safe_size) if files else None
+
+    @staticmethod
+    def _file_complete(path: Path, files_raw: list[Any]) -> bool:
+        """对照 aria2 报的单文件长度，确认文件真的写完了（防磁力占位文件被整理）。"""
+        try:
+            actual = path.stat().st_size
+        except OSError:
+            return False
+        expected = None
+        for item in files_raw:
+            if isinstance(item, dict) and str(item.get("path") or "") == str(path):
+                try:
+                    expected = int(item.get("length") or 0)
+                except (TypeError, ValueError):
+                    expected = None
+                break
+        if expected:
+            return actual >= expected * 0.999
+        return actual > 0
 
     async def _finish_task(self, task: DownloadTask, paths: list[Path]) -> None:
         """下载完成后的收尾：整理 + 字幕。任一步失败也不把任务判成失败。"""
@@ -521,14 +601,9 @@ class DownloadManager:
     async def _organize_if_needed(self, task: DownloadTask, paths: list[Path]) -> Path | None:
         opts = dict(task.organize_opts or {})
         enabled = bool(opts.get("enabled", self.cfg.organize.enabled))
-        media = [p for p in paths if p.suffix.lower() in MEDIA_EXTS]
-        if media:
-            primary = max(media, key=self._safe_size)
-        else:
-            files = [p for p in paths if p.is_file()]
-            if not files:
-                return None
-            primary = max(files, key=self._safe_size)
+        primary = self._pick_primary(paths)
+        if primary is None:
+            return None
         task.saved_path = str(primary.parent)
 
         if not enabled:

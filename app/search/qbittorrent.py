@@ -26,7 +26,11 @@ from ..models import SearchRequest, SourceItem
 from . import SearchProvider
 
 # 推荐插件：yts/bt4g/kickass 这类响应快；避免默认全量插件（容易卡住）
-DEFAULT_PLUGIN_HINT = "yts,yts_am,bt4g,limetorrents,torrentfunk,kickass_torrent,piratebay"
+# 注意：插件站点在境内可达性差异很大，实测经常只有少数可用
+# （例：2026-09 某 NAS 上只有 piratebay 能在 3s 内返回，其余插件站点直连全挂）
+DEFAULT_PLUGIN_HINT = "piratebay,yts,yts_am,bt4g,limetorrents,kickass_torrent,dmhyorg"
+# 首次搜索（超时/无结果）后自动重试的“短名单”
+FALLBACK_PLUGINS = "piratebay,dmhyorg"
 
 
 def _human_size(n: Any) -> str:
@@ -123,60 +127,29 @@ class QBittorrentProvider(SearchProvider):
                     ]
                 plugins = "all"
 
-            try:
-                start = await client.post(
-                    f"{self.base}/api/v2/search/start",
-                    data={"pattern": pattern, "plugins": plugins, "category": self.category},
+            results, status_raw, err = await self._search_once(client, pattern, plugins)
+
+            # 首次无结果（尤其超时）多为插件站点不可达：换“短名单”再试一次
+            if not results and plugins != FALLBACK_PLUGINS:
+                warnings.append(
+                    f"「{self.name}」插件 {plugins} 无结果/超时，已自动改用短名单 {FALLBACK_PLUGINS} 重试"
                 )
-            except httpx.HTTPError as exc:
-                return [], [f"「{self.name}」连接失败：{exc}（确认 WebUI 地址与端口）"]
+                results, status_raw, err2 = await self._search_once(client, pattern, FALLBACK_PLUGINS)
+                err = err2 or err
 
-            if start.status_code == 409:
-                return [], [f"「{self.name}」搜索任务数已达上限，请稍后重试或清空 qBittorrent 搜索页"]
-            if start.status_code >= 400:
-                return [], [f"「{self.name}」启动搜索失败：HTTP {start.status_code} {start.text[:120]}"]
-            try:
-                search_id = int(start.json().get("id"))
-            except Exception:  # noqa: BLE001
-                return [], [f"「{self.name}」返回异常：{start.text[:120]}"]
-
-            results: list[dict[str, Any]] = []
-            deadline = time.monotonic() + self.search_timeout
-            status_raw: Any = {}
-            try:
-                while time.monotonic() < deadline:
-                    resp = await client.get(
-                        f"{self.base}/api/v2/search/results",
-                        params={"id": search_id, "limit": self.limit, "offset": 0},
-                    )
-                    payload = resp.json() if resp.status_code == 200 else {}
-                    results = payload.get("results") or []
-                    status_raw = payload.get("status") or ""
-                    if str(status_raw).lower() not in ("running", "queued"):
-                        break
-                    if results and str(status_raw).lower() == "running":
-                        # 已有结果但仍在跑：再等一轮拿更多结果
-                        await asyncio.sleep(2)
-                        if time.monotonic() >= deadline:
-                            break
-                    await asyncio.sleep(1.5)
-            finally:
-                try:
-                    await client.post(f"{self.base}/api/v2/search/stop", data={"id": search_id})
-                    await client.post(f"{self.base}/api/v2/search/delete", data={"id": search_id})
-                except Exception:  # noqa: BLE001
-                    pass
-
-            if str(status_raw).lower() in ("running", "queued"):
-                if results:
-                    warnings.append("qBittorrent 搜索超时，已展示部分结果（可在 qBittorrent 搜索页手动重试）")
-                else:
-                    return [], [
-                        "qBittorrent 搜索超时且无结果：多为某个插件卡住，"
-                        f"建议在设置里把 plugins 固定为较快的几个（如 {DEFAULT_PLUGIN_HINT}）"
-                    ]
-            if not results:
-                warnings.append("qBittorrent 搜索完成但无结果（换关键词或检查插件）")
+        if err:
+            warnings.append(err)
+        if str(status_raw).lower() in ("running", "queued"):
+            if results:
+                warnings.append("qBittorrent 搜索超时，已展示部分结果（可在 qBittorrent 搜索页手动重试）")
+            else:
+                return [], [
+                    "qBittorrent 搜索超时且无结果：多为插件站点不可达，"
+                    f"建议在设置里只保留可用的几个插件（如 {FALLBACK_PLUGINS}），"
+                    "或先在 qBittorrent「搜索」页手动试一下哪些插件能用"
+                ]
+        if not results:
+            warnings.append("qBittorrent 搜索完成但无结果（换关键词或换插件）")
 
         items = [self._to_item(raw, idx) for idx, raw in enumerate(results)]
         items = [i for i in items if i.url]
@@ -186,6 +159,50 @@ class QBittorrentProvider(SearchProvider):
             if filtered:
                 items = filtered
         return items[: self.limit], warnings
+
+    async def _search_once(
+        self, client: httpx.AsyncClient, pattern: str, plugins: str
+    ) -> tuple[list[dict[str, Any]], Any, str]:
+        """跑一次搜索；返回 (结果, 状态, 错误提示)。"""
+        try:
+            start = await client.post(
+                f"{self.base}/api/v2/search/start",
+                data={"pattern": pattern, "plugins": plugins, "category": self.category},
+            )
+        except httpx.HTTPError as exc:
+            return [], "", f"「{self.name}」连接失败：{exc}（确认 WebUI 地址与端口）"
+
+        if start.status_code == 409:
+            return [], "", f"「{self.name}」搜索任务数已达上限，请稍后重试或清空 qBittorrent 搜索页"
+        if start.status_code >= 400:
+            return [], "", f"「{self.name}」启动搜索失败：HTTP {start.status_code} {start.text[:120]}"
+        try:
+            search_id = int(start.json().get("id"))
+        except Exception:  # noqa: BLE001
+            return [], "", f"「{self.name}」返回异常：{start.text[:120]}"
+
+        results: list[dict[str, Any]] = []
+        status_raw: Any = ""
+        deadline = time.monotonic() + self.search_timeout
+        try:
+            while time.monotonic() < deadline:
+                resp = await client.get(
+                    f"{self.base}/api/v2/search/results",
+                    params={"id": search_id, "limit": self.limit, "offset": 0},
+                )
+                payload = resp.json() if resp.status_code == 200 else {}
+                results = payload.get("results") or []
+                status_raw = payload.get("status") or ""
+                if str(status_raw).lower() not in ("running", "queued"):
+                    break
+                await asyncio.sleep(2 if results else 1.5)
+        finally:
+            try:
+                await client.post(f"{self.base}/api/v2/search/stop", data={"id": search_id})
+                await client.post(f"{self.base}/api/v2/search/delete", data={"id": search_id})
+            except Exception:  # noqa: BLE001
+                pass
+        return results, status_raw, ""
 
     def _to_item(self, raw: dict[str, Any], idx: int) -> SourceItem:
         url = str(raw.get("fileUrl") or raw.get("magnet") or "").strip()

@@ -133,6 +133,13 @@ check("subtitle_entry_prefers_ass_bilingual",
       _score_entry(ass_bilingual, tokens, True) > _score_entry(srt_only, tokens, True),
       f"{_score_entry(ass_bilingual, tokens, True)} vs {_score_entry(srt_only, tokens, True)}")
 check("subtitle_file_rank", _score_sub_file(Path("x.zh.ass")) > _score_sub_file(Path("x.eng.srt")), "ass>.eng.srt")
+
+# 同一发布版本下，简体版应优先于繁体版（真机反馈：繁英被选中过）
+ass_simp = SubHDEntry(sid="3", title="WALL-E.2008.1080p.BluRay.x264 简英双语", fmt="ASS", lang="双语 简体 英语")
+ass_trad = SubHDEntry(sid="4", title="WALL-E.2008.1080p.BluRay.x264.DTS-WiKi.cht&eng", fmt="ASS", lang="双语 繁体 英语")
+check("subtitle_simplified_preferred",
+      _score_entry(ass_simp, tokens, True, True) > _score_entry(ass_trad, tokens, True, True),
+      f"简={_score_entry(ass_simp, tokens, True, True)} 繁={_score_entry(ass_trad, tokens, True, True)}")
 name = cfg.subtitle.name_template.format(video=video.stem)
 check("subtitle_name_template", name.endswith(".zh") and "DVT" in name, name)
 
@@ -201,6 +208,80 @@ check("config_options_roundtrip",
       str([p.options for p in cfg_reload.search.providers if p.type == "custom_api"]))
 check("config_library_root", cfg_reload.organize.library_root == "/vol2/1000/movie", cfg_reload.organize.library_root)
 check("config_subtitle_hint", cfg_reload.subtitle.match_hint == "4K适配HDR", cfg_reload.subtitle.match_hint)
+
+# ---------- 9) 磁力 followedBy 接管 + 占位文件防整理（真机发现的 bug） ----------
+import asyncio  # noqa: E402
+
+
+class _FakeAria2:
+    """按顺序返回预设状态，模拟 aria2 RPC。"""
+
+    def __init__(self, states: dict):
+        self.states = states
+        self.calls: list[str] = []
+
+    async def tell_status(self, gid: str) -> dict:
+        self.calls.append(gid)
+        return self.states.get(gid, {})
+
+
+with tempfile.TemporaryDirectory() as td:
+    td_path = Path(td)
+    cfg2 = load_config(TMP / "config.yaml")
+    cfg2.paths.download_root = str(td_path / "dl")
+    cfg2.paths.state_dir = str(td_path / "data")
+    cfg2.subtitle.enabled = False
+    cfg2.organize.library_root = ""  # 清掉上一节写入的资料库目录，避免写到无权限路径
+    save_app_config(cfg2)
+    cfg2 = load_config(TMP / "config.yaml")
+    mgr3 = DownloadManager(cfg2)
+
+    # A) 磁力：元数据下载完成 → 切换到 followedBy 的真实 GID，不得当成完成
+    task_dir = td_path / "dl" / "incoming" / "mag1"
+    task_dir.mkdir(parents=True, exist_ok=True)
+    real_file = task_dir / "WALL-E.mp4"
+    real_file.write_bytes(b"x" * 1000)
+    meta_torrent = task_dir / "6687a51b.torrent"
+    meta_torrent.write_bytes(b"y" * 13288)
+    fake = _FakeAria2({
+        "meta1": {"status": "complete", "followedBy": ["real1"], "totalLength": "13288",
+                  "completedLength": "13288", "files": [{"path": str(meta_torrent), "length": "13288"}]},
+        "real1": {"status": "active", "totalLength": "1000000", "completedLength": "1000",
+                  "downloadSpeed": "500", "files": [{"path": str(real_file), "length": "1000000"}]},
+        "real2": {"status": "complete", "totalLength": "1000", "completedLength": "1000",
+                  "files": [{"path": str(real_file), "length": "1000"}]},
+    })
+    mgr3.aria2 = fake  # type: ignore[assignment]
+    t_mag = DownloadTask(task_id="mag1", title="WALL-E", url="magnet:?xt=urn:btih:aaa",
+                         status="active", gid="meta1", engine="aria2",
+                         organize_opts={"enabled": True, "mode": "copy"},
+                         created_at="2026-01-03T00:00:00+08:00")
+    mgr3.tasks = {"mag1": t_mag}
+    asyncio.run(mgr3._poll_once())
+    check("magnet_followedby_adopt", t_mag.gid == "real1" and t_mag.status == "active",
+          f"gid={t_mag.gid} status={t_mag.status}")
+    check("magnet_not_finalized_early", not t_mag.organized_path and real_file.exists(),
+          f"organized={t_mag.organized_path}")
+
+    # B) 文件还没写完（总长对不上）→ 不得整理；写完后再轮询才收尾
+    t2 = DownloadTask(task_id="mag2", title="WALL-E", url="magnet:?xt=urn:btih:bbb",
+                      status="active", gid="real2", engine="aria2",
+                      organize_opts={"enabled": True, "mode": "copy"},
+                      created_at="2026-01-04T00:00:00+08:00")
+    mgr3.tasks = {"mag2": t2}
+    real_file.write_bytes(b"z" * 500)   # 只写了一半
+    fake.states["real2"]["files"][0]["length"] = "1000"
+    asyncio.run(mgr3._poll_once())
+    check("incomplete_file_not_organized", t2.status == "active" and not t2.organized_path,
+          f"status={t2.status} organized={t2.organized_path}")
+
+    real_file.write_bytes(b"z" * 1000)  # 写完了
+    asyncio.run(mgr3._poll_once())
+    check("complete_after_full_size", t2.status == "complete" and bool(t2.organized_path),
+          f"status={t2.status} organized={t2.organized_path}")
+    check("torrent_metadata_excluded",
+          all(p.suffix.lower() != ".torrent" for p in mgr3._collect_output_files(t2, [str(meta_torrent)])),
+          str([p.name for p in mgr3._collect_output_files(t2, [str(meta_torrent)])]))
 
 # ---------- 输出 ----------
 print("=" * 68)

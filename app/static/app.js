@@ -8,6 +8,9 @@ const state = {
   lastResults: [],
   bestId: "",
   taskTimer: null,
+  pollTimer: null,
+  pollInterval: 1500,
+  pollErrors: 0,
 };
 
 async function api(path, options = {}) {
@@ -428,12 +431,37 @@ function renderTasks(tasks) {
 }
 
 async function loadTasks() {
+  const live = document.getElementById("task-live");
   try {
     const tasks = await api("/api/tasks");
+    state.lastResults = state.lastResults || [];
     renderTasks(tasks);
+    state.pollErrors = 0;
+    if (live) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      live.textContent = `更新于 ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      live.style.color = "";
+    }
+    // 有活动任务就快刷，空闲时慢刷
+    const busy = tasks.some((t) => ["active", "queued", "waiting", "paused", "interrupted", "searching"].includes(t.status)
+      || t.subtitle_status === "searching");
+    state.pollInterval = busy ? 1500 : 4000;
   } catch (err) {
-    /* keep silent on poll errors */
+    state.pollErrors = (state.pollErrors || 0) + 1;
+    if (live) {
+      live.textContent = `⚠︎ 状态更新失败（第${state.pollErrors}次），请刷新页面`;
+      live.style.color = "var(--danger)";
+    }
+    state.pollInterval = Math.min(15000, (state.pollInterval || 4000) * 2);
+  } finally {
+    scheduleTaskPoll();
   }
+}
+
+function scheduleTaskPoll() {
+  clearTimeout(state.pollTimer);
+  state.pollTimer = setTimeout(loadTasks, state.pollInterval || 2500);
 }
 
 async function saveConfig() {
@@ -529,20 +557,35 @@ async function testLLM() {
 }
 
 function bindEvents() {
-  $("#search-form").addEventListener("submit", doSearch);
-  $("#btn-best").addEventListener("click", pickBest);
-  $("#btn-settings").addEventListener("click", () => { $("#modal-settings").hidden = false; });
+  const on = (sel, ev, fn) => {
+    const el = document.querySelector(sel);
+    if (!el) { console.warn("[片坞] 找不到元素，跳过绑定:", sel); return; }
+    el.addEventListener(ev, fn);
+  };
+  on("#search-form", "submit", doSearch);
+  on("#btn-best", "click", pickBest);
+  on("#btn-settings", "click", () => { $("#modal-settings").hidden = false; });
   $$("[data-close-settings]").forEach((b) => b.addEventListener("click", () => { $("#modal-settings").hidden = true; }));
   $$("[data-close-download]").forEach((b) => b.addEventListener("click", () => { $("#modal-download").hidden = true; }));
-  $("#btn-save-config").addEventListener("click", saveConfig);
-  $("#btn-test-llm").addEventListener("click", testLLM);
-  $("#btn-start-download").addEventListener("click", startDownload);
-  $("#btn-refresh-tasks").addEventListener("click", loadTasks);
-  $("#query").addEventListener("input", () => { clearTimeout(window._pt); window._pt = setTimeout(refreshOrganizePreview, 400); });
-  $("#year").addEventListener("change", refreshOrganizePreview);
-  $("#quality").addEventListener("change", refreshOrganizePreview);
+  on("#btn-save-config", "click", saveConfig);
+  on("#btn-test-llm", "click", testLLM);
+  on("#btn-start-download", "click", startDownload);
+  on("#btn-refresh-tasks", "click", () => { state.pollInterval = 1500; loadTasks(); });
+  on("#query", "input", () => { clearTimeout(window._pt); window._pt = setTimeout(refreshOrganizePreview, 400); });
+  on("#year", "change", refreshOrganizePreview);
+  on("#quality", "change", refreshOrganizePreview);
 
-  $("#tasks").addEventListener("click", async (e) => {
+  // 页面从缓存/后台恢复时（bfcache、切回标签页），定时器可能被冻结 → 立即补一次刷新并恢复轮询
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      state.pollInterval = 1500;
+      loadTasks();
+      checkDownloader();
+    }
+  });
+  window.addEventListener("pageshow", () => { state.pollInterval = 1500; loadTasks(); });
+
+  on("#tasks", "click", async (e) => {
     const btn = e.target.closest(".btn-retry-sub");
     if (!btn) return;
     const id = btn.getAttribute("data-task");
@@ -558,7 +601,7 @@ function bindEvents() {
     }
   });
 
-  $("#results").addEventListener("click", (e) => {
+  on("#results", "click", (e) => {
     const btn = e.target.closest(".btn-pick");
     if (!btn) return;
     openDownloadModal({
@@ -571,7 +614,7 @@ function bindEvents() {
   });
 
   // 支持在结果区空白处快速手动粘贴链接（双击结果区）
-  $("#results").addEventListener("dblclick", () => {
+  on("#results", "dblclick", () => {
     const url = prompt("粘贴磁力链接 / 种子 URL / HTTP 直链：");
     if (!url) return;
     openDownloadModal({
@@ -584,17 +627,20 @@ function bindEvents() {
 }
 
 async function init() {
-  bindEvents();
+  try {
+    bindEvents();
+  } catch (err) {
+    console.error("[片坞] 事件绑定失败:", err);
+    showToast("界面初始化异常：" + (err.message || err), "err");
+  }
   try {
     await loadConfig();
   } catch (err) {
     showToast(err.message || "加载配置失败", "err");
   }
   await checkDownloader();
+  state.pollInterval = 1500;
   await loadTasks();
-  state.taskTimer = setInterval(async () => {
-    await loadTasks();
-  }, 2500);
   setInterval(checkDownloader, 15000);
 }
 

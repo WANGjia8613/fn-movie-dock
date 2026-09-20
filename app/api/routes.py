@@ -107,6 +107,8 @@ async def update_config(request: Request, body: ConfigUpdateIn) -> dict[str, Any
             cfg.subtitle.enabled = bool(data["enabled"])
         if "prefer_bilingual" in data and data["prefer_bilingual"] is not None:
             cfg.subtitle.prefer_bilingual = bool(data["prefer_bilingual"])
+        if "prefer_simplified" in data and data["prefer_simplified"] is not None:
+            cfg.subtitle.prefer_simplified = bool(data["prefer_simplified"])
         if "soft_fail" in data and data["soft_fail"] is not None:
             cfg.subtitle.soft_fail = bool(data["soft_fail"])
         for key in ("match_hint", "name_template", "provider"):

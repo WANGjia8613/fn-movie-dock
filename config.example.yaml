@@ -88,6 +88,8 @@ subtitle:
   # 指定优先匹配的字幕条目关键词（留空=自动）
   match_hint: ""
   prefer_bilingual: true
+  # 简体优先（同发布版本下优先选简体，而不是繁体）
+  prefer_simplified: true
   name_template: "{video}.zh"
   # 解压工具（按顺序尝试；容器内已装 7z + bsdtar）
   extract_tools: ["7z", "7zz", "bsdtar", "unrar", "unar"]

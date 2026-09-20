@@ -95,6 +95,7 @@ class TaskOut(BaseModel):
     subtitle_status: str = ""
     subtitle_path: str = ""
     subtitle_note: str = ""
+    engine: str = ""
     error: str = ""
     created_at: str = ""
     updated_at: str = ""

@@ -30,9 +30,11 @@ _HINT_TOKENS = [
     "imax", "criterion", "sdr", "10bit",
 ]
 _LANG_BONUS = [
-    (r"(简英|中英|简繁|双语|chs&eng|zh&en|中英双语|简体&英文)", 8.0),
-    (r"(简体|简中|chs|chi|中文|国语)", 6.0),
-    (r"(繁体|繁中|cht|big5)", 2.5),
+    # 大陆用户优先：简英双语 > 简体 > 繁英 > 繁体 > 纯英文
+    (r"(简英|中英|简繁|chs&eng|chs_eng|zh&en|中英双语|简体&英文|简体中英)", 10.0),
+    (r"(简体|简中|chs|chi|中文|国语|简)", 7.0),
+    (r"(繁英|cht&eng|cht_eng|繁中|繁体|cht|big5|繁)", 3.0),
+    (r"(双语|bilingual)", 5.0),
     (r"(英语|english|eng\b)", 1.0),
 ]
 _FMT_BONUS = {"ASS": 6.0, "SSA": 4.0, "SRT": 3.0, "SUP": 2.0, "SUB": 1.0}
@@ -76,14 +78,27 @@ def tokens_from_video(video: Path | str) -> list[str]:
     return tokens
 
 
-def _score_entry(entry: SubHDEntry, tokens: list[str], prefer_bilingual: bool) -> float:
+def _score_entry(
+    entry: SubHDEntry,
+    tokens: list[str],
+    prefer_bilingual: bool,
+    prefer_simplified: bool = True,
+) -> float:
     title = entry.title or ""
     lang_text = f"{title} {entry.lang or ''}"
     score = 0.0
+    simplified = bool(re.search(r"(简体|简中|简英|简繁|chs|\bzh\b)", lang_text, re.I))
+    traditional = bool(re.search(r"(繁体|繁中|繁英|cht|big5)", lang_text, re.I))
     for pattern, bonus in _LANG_BONUS:
         if re.search(pattern, lang_text, re.I):
             score += bonus * (1.2 if prefer_bilingual and bonus >= 8.0 else 1.0)
             break
+    # 大陆用户优先简体：简繁同时出现（简繁双语）也算简体优先
+    if prefer_simplified:
+        if simplified:
+            score += 6.0
+        elif traditional:
+            score -= 4.0
     score += _FMT_BONUS.get((entry.fmt or "").upper(), 0.0)
     low = title.lower()
     matched_year = bool(re.search(r"\b(19|20)\d{2}\b", title))
@@ -243,13 +258,13 @@ class SubtitleService:
 
             ranked = sorted(
                 entries,
-                key=lambda e: _score_entry(e, tokens, self.cfg.prefer_bilingual),
+                key=lambda e: _score_entry(e, tokens, self.cfg.prefer_bilingual, self.cfg.prefer_simplified),
                 reverse=True,
             )[:3]
             keyword_is_cn = bool(re.search(r"[\u4e00-\u9fff]", keyword))
             skipped = 0
             for entry in ranked:
-                score = _score_entry(entry, tokens, self.cfg.prefer_bilingual)
+                score = _score_entry(entry, tokens, self.cfg.prefer_bilingual, self.cfg.prefer_simplified)
                 # 英文关键词经常会搜到同系列短片/别名（如用 WALL-E 搜到《电焊工波力》），
                 # 此时要求条目里能找到片源特征（2160p/DVT…），否则宁可不配也不配错。
                 if not keyword_is_cn and not _token_hit(entry, tokens):

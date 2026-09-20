@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>片坞 Movie Dock</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=0.1.2" />
 </head>
 <body>
   <div class="app">
@@ -71,6 +71,7 @@
       <section class="panel tasks-panel">
         <div class="panel-head">
           <h2>下载任务</h2>
+          <span id="task-live" class="hint"></span>
           <button id="btn-refresh-tasks" class="btn ghost" type="button">刷新</button>
         </div>        <div id="tasks" class="tasks">
           <div class="empty">暂无任务。检索后选择一条片源开始下载。</div>
@@ -205,6 +206,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=0.1.2"></script>
 </body>
 </html>
